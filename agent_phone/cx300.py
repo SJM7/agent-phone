@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Callable
 
 from agent_phone.cx300_protocol import (VID, PID, EventDetector,
@@ -25,6 +26,7 @@ log = logging.getLogger(__name__)
 
 KEEPALIVE_INTERVAL = 25.0
 RECONNECT_INTERVAL = 3.0
+BLINK_INTERVAL = 0.5    # the CX300 has no native flash pattern; we toggle
 
 
 class Cx300Phone:
@@ -41,6 +43,9 @@ class Cx300Phone:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._blinking = False
+        self._blink_lit = False
+        self._next_blink = 0.0
 
     # -- lifecycle ----------------------------------------------------------
     def start(self) -> None:
@@ -66,7 +71,17 @@ class Cx300Phone:
 
     # -- outputs ------------------------------------------------------------
     def set_led(self, attention: bool) -> None:
+        self._blinking = attention
+        self._blink_lit = attention
+        self._next_blink = time.monotonic() + BLINK_INTERVAL
         self._write(build_led("red" if attention else "off"))
+
+    def _blink_tick(self, now: float) -> None:
+        if not self._blinking or now < self._next_blink:
+            return
+        self._blink_lit = not self._blink_lit
+        self._next_blink = now + BLINK_INTERVAL
+        self._write(build_led("red" if self._blink_lit else "off"))
 
     def show_dashboard(self, top_left: str, bottom_left: str,
                        top_right: str, bottom_right: str) -> None:
@@ -142,9 +157,9 @@ class Cx300Phone:
     def _read_loop(self, dev) -> None:
         detector = EventDetector()
         last_keepalive = 0.0
-        import time
         while not self._stop.is_set():
             now = time.monotonic()
+            self._blink_tick(now)
             if now - last_keepalive > KEEPALIVE_INTERVAL:
                 last_keepalive = now
                 try:
