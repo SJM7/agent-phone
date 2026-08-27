@@ -151,10 +151,13 @@ def test_sanitize_display_text():
     # a real Terminal.app title: em dashes, spinner glyph, dimension marker
     title = "Programming — ✳ Agent Phone — caffeinate ◂ claude — 280×70"
     out = sanitize_display_text(title)
-    assert out == "Programming - Agent "
-    assert len(out) == 20
-    assert sanitize_display_text("hi") == "hi" + " " * 18       # padded
-    assert sanitize_display_text("") == " " * 20               # full blank line
-    assert sanitize_display_text("a  b\tc") == "a b c".ljust(20)
+    assert out == "Programming - Agent Phon"
+    assert len(out) == 24
+    # width 24 = exactly three full 8-char text chunks, so every report is
+    # a complete fixed-size packet (partial packets showed buffer garbage)
+    assert [len(r) for r in build_text(out)] == [18, 18, 18]
+    assert sanitize_display_text("hi") == "hi" + " " * 22       # padded
+    assert sanitize_display_text("") == " " * 24               # full blank line
+    assert sanitize_display_text("a  b\tc") == "a b c".ljust(24)
     assert sanitize_display_text("wide", width=6) == "wide  "
-    assert sanitize_display_text("“quoted”…") == '"quoted"...'.ljust(20)
+    assert sanitize_display_text("“quoted”…") == '"quoted"...'.ljust(24)

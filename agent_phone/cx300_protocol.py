@@ -136,7 +136,7 @@ _DISPLAY_REPLACEMENTS = {"—": "-", "–": "-", "’": "'", "‘": "'", "“": 
                          "”": '"', "×": "x", "…": "..."}
 
 
-def sanitize_display_text(text: str, width: int = 20) -> str:
+def sanitize_display_text(text: str, width: int = 24) -> str:
     """Make text safe for the CX300's tiny LCD font: fancy punctuation to
     ASCII, everything non-printable-ASCII dropped, whitespace collapsed,
     then truncated and space-padded to `width` so a new write fully
