@@ -120,6 +120,11 @@ only observes them.
 | `0x16` output | `[0x16, color]` | status LED: `0x01` green, `0x03` red, `0x04` orange-red, `0x05` orange, `0x06` DND pattern, `0x07` off, `0x08` green/orange |
 | `0x17` feature | `[0x17, lcid, 0x04, 0x01, 0x02]` | initialization and keepalive; `lcid` is a Microsoft locale ID and sets the phone's UI language (`0x09` English) |
 
+A live probe on this project's phone (August 2026) found **no native
+flash/blink pattern**: codes `0x02` and `0x09`–`0x0B` did nothing visible,
+and `0x06`/`0x08` showed steady output, not blinking. To blink the LED,
+toggle `0x16` color/off from the host (~1 Hz works well).
+
 The `0x17` feature report is the only handshake the phone needs, and it
 must be **resent roughly every 30 seconds**. Without it the phone abandons
 the host and falls back to its built-in "please upgrade Office
