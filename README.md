@@ -1,7 +1,8 @@
 # Agent Phone
 
 <p align="center">
-  <img src="assets/polycom-cx300.webp" alt="Polycom CX300 desk phone" width="420">
+  <img src="assets/polycom-cx300.webp" alt="Polycom CX300 desk phone" width="380">
+  <img src="assets/pepe-phone.png" alt="Taking the call" width="300">
 </p>
 
 **A desk phone as a control surface for your AI coding agents.**
