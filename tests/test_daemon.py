@@ -82,10 +82,13 @@ def test_star_cycle_clears_like_notification_log(monkeypatch, tmp_path):
     assert backend.led is False  # ...clears the log: LED off
     assert daemon.router.needs_attention() == []
 
-    # a further * finds nothing and does not re-focus anything
-    n = len(focused)
+    # a further * switches to quiet-time browsing: it continues cycling
+    # through all bound terminals, starting after the last visited one
     daemon.focus_next()
-    assert len(focused) == n
+    assert focused[-1] == refs[0]
+    assert backend.led is False
+    daemon.focus_next()
+    assert focused[-1] == refs[1]
 
 
 def test_reread_after_new_attention(monkeypatch, tmp_path):
@@ -193,8 +196,8 @@ def test_dashboard_rendering(monkeypatch, tmp_path):
     assert backend.dashboards[-1] == ("go: term-0", "term-1", "*1", "#3")
     daemon.focus_next()                       # last one read: quiet again
     assert backend.dashboards[-1] == ("go: term-1", "all quiet", "*0", "#3")
-    daemon.focus_next()
-    assert backend.dashboards[-1] == ("all quiet", "all quiet", "*0", "#3")
+    daemon.focus_next()                       # quiet -> browse mode
+    assert backend.dashboards[-1] == ("view: term-2", "all quiet", "*0", "#3")
 
 
 def test_bindings_persist_across_restart(monkeypatch, tmp_path):

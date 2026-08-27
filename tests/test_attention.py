@@ -110,6 +110,33 @@ def test_new_mark_during_cycle_lands_at_queue_end():
     assert r.next_attention() == "a"
 
 
+def test_browse_cycles_all_bound_from_first():
+    r = make("a", "b", "c")
+    assert [r.next_bound() for _ in range(5)] == ["a", "b", "c", "a", "b"]
+
+
+def test_browse_empty():
+    assert AttentionRouter().next_bound() is None
+
+
+def test_attention_visit_moves_browse_position():
+    r = make("a", "b", "c")
+    r.mark_attention("b")
+    assert r.next_attention() == "b"
+    r.clear_attention("b")
+    # browsing resumes AFTER the last visited terminal
+    assert r.next_bound() == "c"
+    assert r.next_bound() == "a"
+
+
+def test_unbind_resets_browse():
+    r = make("a", "b")
+    assert r.next_bound() == "a"
+    r.unbind("a")
+    assert r.next_bound() == "b"
+    assert r.next_bound() == "b"    # only one left, keeps returning it
+
+
 def test_instances_independent():
     r1, r2 = make("a"), make("a")
     r1.mark_attention("a")

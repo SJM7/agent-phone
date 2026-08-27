@@ -197,21 +197,27 @@ class AgentPhoneDaemon:
         self._refresh(f"bound {ref.label}")
 
     def focus_next(self) -> None:
+        """* key: next terminal needing attention; when all is quiet,
+        browse round-robin through every bound terminal instead."""
         self._prune_dead_windows()
         key = self.router.next_attention()
+        browsing = key is None
+        if browsing:
+            key = self.router.next_bound()
         if key is None:
-            log.info("* pressed but nothing needs attention")
-            self._refresh("all quiet")
+            log.info("* pressed but nothing is bound")
+            self._refresh("nothing bound")
             return
         ref = self.windows.get(key)
         focused = ref is not None and macfocus.focus(ref)
         if focused:
-            log.info("focused %s", key)
-        # Notification-log semantics: cycling to a terminal marks it read, so
-        # the LED goes dark the moment the last waiting terminal is visited.
-        self.router.clear_attention(key)
+            log.info("%s %s", "browsing" if browsing else "focused", key)
+        if not browsing:
+            # Notification-log semantics: cycling to a terminal marks it
+            # read; the LED goes dark when the last waiting one is visited.
+            self.router.clear_attention(key)
         if focused:
-            self._refresh(f"go: {ref.label}")
+            self._refresh(("view: " if browsing else "go: ") + ref.label)
         self._sync_led()
 
     def _prune_dead_windows(self) -> None:
