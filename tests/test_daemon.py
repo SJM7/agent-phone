@@ -200,6 +200,23 @@ def test_dashboard_rendering(monkeypatch, tmp_path):
     assert backend.dashboards[-1] == ("view: term-2", "all quiet", "*0", "#3")
 
 
+def test_zero_minimizes_all_bound(monkeypatch, tmp_path):
+    daemon, refs, focused, bind, finish = make_daemon(monkeypatch, tmp_path)
+    minimized = []
+    monkeypatch.setattr(macfocus, "minimize",
+                        lambda ref: minimized.append(ref) or True)
+    for i in range(3):
+        bind(i)
+    daemon.handle_key("0")
+    assert minimized == refs
+    assert daemon.backend.dashboards[-1] == ("minimized 3", "all quiet",
+                                             "*0", "#3")
+    # with nothing bound it reports rather than crashing
+    empty, *_ = make_daemon(monkeypatch, tmp_path / "e", n_windows=0)
+    empty.handle_key("0")
+    assert empty.backend.dashboards[-1][0] == "nothing bound"
+
+
 def test_bindings_persist_across_restart(monkeypatch, tmp_path):
     path = tmp_path / "bindings.json"
     monkeypatch.setattr(macfocus, "exists", lambda ref: True)

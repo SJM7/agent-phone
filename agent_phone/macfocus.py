@@ -81,6 +81,14 @@ TERMINAL_EXISTS_SCRIPT = (
     'tell application "Terminal" to (exists window id {window_id}) as text'
 )
 
+TERMINAL_MINIMIZE_SCRIPT = """\
+tell application "Terminal"
+	if not (exists window id {window_id}) then return "MISSING"
+	set miniaturized of window id {window_id} to true
+	return "OK"
+end tell
+"""
+
 # iTerm2: window `id` is a stable integer, and each session has a unique id
 # string (`id of current session of current window`).  Based on iTerm2's
 # published AppleScript dictionary; iTerm2 is not installed on the dev
@@ -121,6 +129,16 @@ end tell
 ITERM_EXISTS_SCRIPT = (
     'tell application "iTerm2" to (exists window id {window_id}) as text'
 )
+
+# iTerm2 windows expose the standard `miniaturized` property in the same
+# dictionary as Terminal.app; untested live (iTerm2 not installed here).
+ITERM_MINIMIZE_SCRIPT = """\
+tell application "iTerm2"
+	if not (exists window id {window_id}) then return "MISSING"
+	set miniaturized of window id {window_id} to true
+	return "OK"
+end tell
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +330,25 @@ def focus(ref: WindowRef) -> bool:
     output = _run_osascript(script)
     if output is None:
         return False
+    if output == "MISSING":
+        log.info("window %s:%d no longer exists", ref.app, ref.window_id)
+        return False
+    return output == "OK"
+
+
+def minimize(ref: WindowRef) -> bool:
+    """Minimize this window to the Dock.
+
+    Returns False if the window no longer exists or osascript fails.
+    """
+    if ref.app == APP_TERMINAL:
+        script = TERMINAL_MINIMIZE_SCRIPT.format(window_id=int(ref.window_id))
+    elif ref.app == APP_ITERM:
+        script = ITERM_MINIMIZE_SCRIPT.format(window_id=int(ref.window_id))
+    else:
+        log.error("cannot minimize unknown app %r", ref.app)
+        return False
+    output = _run_osascript(script)
     if output == "MISSING":
         log.info("window %s:%d no longer exists", ref.app, ref.window_id)
         return False

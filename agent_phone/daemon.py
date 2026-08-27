@@ -86,6 +86,8 @@ class AgentPhoneDaemon:
             self.bind_frontmost()
         elif digit == "*":
             self.focus_next()
+        elif digit == "0":
+            self.minimize_all()
 
     def handle_offhook(self) -> None:
         if self.voice_mode == "claude":
@@ -219,6 +221,13 @@ class AgentPhoneDaemon:
         if focused:
             self._refresh(("view: " if browsing else "go: ") + ref.label)
         self._sync_led()
+
+    def minimize_all(self) -> None:
+        """0 key: sweep every bound terminal window into the Dock."""
+        self._prune_dead_windows()
+        count = sum(1 for ref in self.windows.values() if macfocus.minimize(ref))
+        log.info("minimized %d bound window(s)", count)
+        self._refresh(f"minimized {count}" if count else "nothing bound")
 
     def _prune_dead_windows(self) -> None:
         pruned = False
