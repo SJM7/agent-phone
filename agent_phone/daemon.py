@@ -48,6 +48,7 @@ class AgentPhoneDaemon:
         self.stt_command = stt_command
         self.voice_mode = voice_mode          # claude | record | off
         self.dictation_key = dictation_key
+        self._ptt_proc: subprocess.Popen | None = None
         self.loop: asyncio.AbstractEventLoop | None = None
         self.backend = None            # set by main()
 
@@ -84,10 +85,11 @@ class AgentPhoneDaemon:
     def handle_offhook(self) -> None:
         if self.voice_mode == "claude":
             # Hold Claude Code's push-to-talk key for as long as the receiver
-            # is up; its own dictation streams from the handset mic (the
-            # system default input) straight into the prompt box.
+            # is up. Terminals detect a held key by its repeat stream, and
+            # synthetic key events don't auto-repeat, so post key-downs on a
+            # repeat-like cadence until hang-up.
             log.info("receiver up: holding push-to-talk")
-            self._dictation_key_event("down")
+            self._start_ptt_hold()
         elif self.voice_mode == "record":
             log.info("receiver up: recording")
             self.backend.start_capture()
@@ -95,7 +97,7 @@ class AgentPhoneDaemon:
     def handle_onhook(self) -> None:
         if self.voice_mode == "claude":
             log.info("receiver down: releasing push-to-talk")
-            self._dictation_key_event("up")
+            self._stop_ptt_hold()
             return
         if self.voice_mode != "record":
             return
@@ -106,19 +108,39 @@ class AgentPhoneDaemon:
         assert self.loop is not None
         self.loop.run_in_executor(None, self._transcribe, wav)
 
-    def _dictation_key_event(self, direction: str) -> None:
-        script = (f'tell application "System Events" to key {direction} '
-                  f'"{self.dictation_key}"')
-        def run() -> None:
+    def _start_ptt_hold(self) -> None:
+        if self._ptt_proc is not None:
+            return
+        cmd = ["osascript",
+               "-e", "repeat 7500 times",   # ~5 min safety cap
+               "-e", f'tell application "System Events" to key down '
+                     f'"{self.dictation_key}"',
+               "-e", "delay 0.04",
+               "-e", "end repeat"]
+        try:
+            self._ptt_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                              stderr=subprocess.DEVNULL)
+        except OSError as exc:
+            log.error("could not start push-to-talk hold: %s", exc)
+
+    def _stop_ptt_hold(self) -> None:
+        proc, self._ptt_proc = self._ptt_proc, None
+        if proc is not None:
+            proc.terminate()
+
+        def release() -> None:
             try:
-                subprocess.run(["osascript", "-e", script], capture_output=True,
-                               timeout=5, check=True)
+                subprocess.run(
+                    ["osascript", "-e",
+                     f'tell application "System Events" to key up '
+                     f'"{self.dictation_key}"'],
+                    capture_output=True, timeout=5, check=True)
             except (subprocess.SubprocessError, OSError) as exc:
-                log.error("push-to-talk key %s failed: %s", direction, exc)
+                log.error("push-to-talk key up failed: %s", exc)
         if self.loop is not None:
-            self.loop.run_in_executor(None, run)
+            self.loop.run_in_executor(None, release)
         else:
-            run()
+            release()
 
     # -- binding / focus ----------------------------------------------------
     def bind_frontmost(self) -> None:

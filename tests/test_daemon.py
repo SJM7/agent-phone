@@ -107,54 +107,78 @@ def test_turn_start_still_clears_without_cycling(monkeypatch):
     assert daemon.backend.led is False
 
 
+class FakeProc:
+    def __init__(self, cmd):
+        self.cmd = cmd
+        self.terminated = False
+
+    def terminate(self):
+        self.terminated = True
+
+
 def _capture_osascript(monkeypatch):
-    calls = []
+    runs, procs = [], []
 
     def fake_run(cmd, **kwargs):
-        calls.append(cmd)
+        runs.append(cmd)
         class R:
             stdout = ""
         return R()
 
+    def fake_popen(cmd, **kwargs):
+        proc = FakeProc(cmd)
+        procs.append(proc)
+        return proc
+
     monkeypatch.setattr(daemon_mod.subprocess, "run", fake_run)
-    return calls
+    monkeypatch.setattr(daemon_mod.subprocess, "Popen", fake_popen)
+    return runs, procs
 
 
 def test_voice_claude_holds_and_releases_push_to_talk(monkeypatch):
-    calls = _capture_osascript(monkeypatch)
+    runs, procs = _capture_osascript(monkeypatch)
     d = AgentPhoneDaemon(http_port=0, voice_mode="claude")
     d.backend = StubBackend()
     d.handle_offhook()
+    # hold = a repeat loop posting key-downs (synthetic events don't
+    # auto-repeat, and the terminal detects a hold by its repeat stream)
+    assert len(procs) == 1
+    script = " ".join(procs[0].cmd)
+    assert "repeat" in script and 'key down " "' in script
+    d.handle_offhook()                        # second lift is a no-op
+    assert len(procs) == 1
     d.handle_onhook()
-    assert len(calls) == 2
-    assert calls[0][0] == "osascript" and 'key down " "' in calls[0][2]
-    assert 'key up " "' in calls[1][2]
+    assert procs[0].terminated is True
+    assert len(runs) == 1 and 'key up " "' in runs[0][2]
     assert d.backend.capturing is False       # no ffmpeg recording in this mode
+    d.handle_onhook()                         # second hang-up: no double release
+    assert len(runs) == 2                     # key up is still sent (harmless)
 
 
 def test_voice_claude_custom_key(monkeypatch):
-    calls = _capture_osascript(monkeypatch)
+    runs, procs = _capture_osascript(monkeypatch)
     d = AgentPhoneDaemon(http_port=0, voice_mode="claude", dictation_key="g")
     d.backend = StubBackend()
     d.handle_offhook()
-    assert 'key down "g"' in calls[0][2]
+    assert 'key down "g"' in " ".join(procs[0].cmd)
 
 
 def test_voice_record_uses_backend_capture(monkeypatch):
-    calls = _capture_osascript(monkeypatch)
+    runs, procs = _capture_osascript(monkeypatch)
     d = AgentPhoneDaemon(http_port=0, voice_mode="record")
     d.backend = StubBackend()
     d.handle_offhook()
     assert d.backend.capturing is True
     d.handle_onhook()
     assert d.backend.capturing is False
-    assert calls == []                        # no push-to-talk keystrokes
+    assert runs == [] and procs == []         # no push-to-talk keystrokes
 
 
 def test_voice_off_ignores_receiver(monkeypatch):
-    calls = _capture_osascript(monkeypatch)
+    runs, procs = _capture_osascript(monkeypatch)
     d = AgentPhoneDaemon(http_port=0, voice_mode="off")
     d.backend = StubBackend()
     d.handle_offhook()
     d.handle_onhook()
-    assert calls == [] and d.backend.capturing is False
+    assert runs == [] and procs == []
+    assert d.backend.capturing is False
