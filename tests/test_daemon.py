@@ -29,8 +29,9 @@ class StubBackend:
         return None
 
 
-def make_daemon(monkeypatch, n_windows=3):
-    daemon = AgentPhoneDaemon(http_port=0)
+def make_daemon(monkeypatch, tmp_path, n_windows=3):
+    daemon = AgentPhoneDaemon(http_port=0,
+                              bindings_path=tmp_path / "bindings.json")
     daemon.backend = StubBackend()
     refs = [WindowRef(app="Terminal", window_id=100 + i, tab_index=1,
                       label=f"term-{i}") for i in range(n_windows)]
@@ -55,8 +56,8 @@ def make_daemon(monkeypatch, n_windows=3):
     return daemon, refs, focused, bind, link_and_finish
 
 
-def test_star_cycle_clears_like_notification_log(monkeypatch):
-    daemon, refs, focused, bind, finish = make_daemon(monkeypatch)
+def test_star_cycle_clears_like_notification_log(monkeypatch, tmp_path):
+    daemon, refs, focused, bind, finish = make_daemon(monkeypatch, tmp_path)
     for i in range(3):
         bind(i)
     for i in range(3):
@@ -83,8 +84,8 @@ def test_star_cycle_clears_like_notification_log(monkeypatch):
     assert len(focused) == n
 
 
-def test_reread_after_new_attention(monkeypatch):
-    daemon, refs, focused, bind, finish = make_daemon(monkeypatch)
+def test_reread_after_new_attention(monkeypatch, tmp_path):
+    daemon, refs, focused, bind, finish = make_daemon(monkeypatch, tmp_path)
     for i in range(2):
         bind(i)
     finish(0)
@@ -97,8 +98,8 @@ def test_reread_after_new_attention(monkeypatch):
     assert daemon.backend.led is False
 
 
-def test_turn_start_still_clears_without_cycling(monkeypatch):
-    daemon, refs, focused, bind, finish = make_daemon(monkeypatch)
+def test_turn_start_still_clears_without_cycling(monkeypatch, tmp_path):
+    daemon, refs, focused, bind, finish = make_daemon(monkeypatch, tmp_path)
     bind(0)
     finish(0)
     assert daemon.backend.led is True
@@ -135,9 +136,9 @@ def _capture_osascript(monkeypatch):
     return runs, procs
 
 
-def test_voice_claude_holds_and_releases_push_to_talk(monkeypatch):
+def test_voice_claude_holds_and_releases_push_to_talk(monkeypatch, tmp_path):
     runs, procs = _capture_osascript(monkeypatch)
-    d = AgentPhoneDaemon(http_port=0, voice_mode="claude")
+    d = AgentPhoneDaemon(http_port=0, bindings_path=tmp_path / "b.json", voice_mode="claude")
     d.backend = StubBackend()
     d.handle_offhook()
     # hold = a repeat loop posting key-downs (synthetic events don't
@@ -155,17 +156,17 @@ def test_voice_claude_holds_and_releases_push_to_talk(monkeypatch):
     assert len(runs) == 2                     # key up is still sent (harmless)
 
 
-def test_voice_claude_custom_key(monkeypatch):
+def test_voice_claude_custom_key(monkeypatch, tmp_path):
     runs, procs = _capture_osascript(monkeypatch)
-    d = AgentPhoneDaemon(http_port=0, voice_mode="claude", dictation_key="g")
+    d = AgentPhoneDaemon(http_port=0, bindings_path=tmp_path / "b.json", voice_mode="claude", dictation_key="g")
     d.backend = StubBackend()
     d.handle_offhook()
     assert 'key down "g"' in " ".join(procs[0].cmd)
 
 
-def test_voice_record_uses_backend_capture(monkeypatch):
+def test_voice_record_uses_backend_capture(monkeypatch, tmp_path):
     runs, procs = _capture_osascript(monkeypatch)
-    d = AgentPhoneDaemon(http_port=0, voice_mode="record")
+    d = AgentPhoneDaemon(http_port=0, bindings_path=tmp_path / "b.json", voice_mode="record")
     d.backend = StubBackend()
     d.handle_offhook()
     assert d.backend.capturing is True
@@ -195,9 +196,9 @@ def test_bindings_persist_across_restart(monkeypatch, tmp_path):
     assert d2.backend.led is True
 
 
-def test_voice_off_ignores_receiver(monkeypatch):
+def test_voice_off_ignores_receiver(monkeypatch, tmp_path):
     runs, procs = _capture_osascript(monkeypatch)
-    d = AgentPhoneDaemon(http_port=0, voice_mode="off")
+    d = AgentPhoneDaemon(http_port=0, bindings_path=tmp_path / "b.json", voice_mode="off")
     d.backend = StubBackend()
     d.handle_offhook()
     d.handle_onhook()
