@@ -113,6 +113,9 @@ class AgentPhoneDaemon:
         if ref is not None and macfocus.focus(ref):
             log.info("focused %s", key)
             self.backend.show("attending:", ref.label)
+        # Notification-log semantics: cycling to a terminal marks it read, so
+        # the LED goes dark the moment the last waiting terminal is visited.
+        self.router.clear_attention(key)
         self._sync_led()
 
     def _prune_dead_windows(self) -> None:
