@@ -71,16 +71,20 @@ unknowns — in [docs/cx300-hid-protocol.md](docs/cx300-hid-protocol.md) so it
 can't vanish again. Everything below is verified against this repo's own
 phone.
 
-### Input report `0x01` (8 data bytes, interrupt IN)
+### Input report `0x01` (8 bytes total, interrupt IN)
+
+Byte positions verified live against this repo's phone (the community docs
+have flags and keypad swapped due to ambiguous indexing):
 
 | Byte | Meaning |
 |---|---|
-| 0 | keypad code: `0x00` none, `0x01`–`0x0A` digits `0`–`9`, `0x0B` `*`, `0x0C` `#` |
+| 0 | report ID `0x01` |
 | 1 | flags: `0x01` off-hook, `0x02` hold/flash, `0x04` redial, `0x08` long-press, `0x10` mute key, `0x20` delete |
-| 2 | audio session: `0x00` enabled, `0x03` disabled |
-| 3 | active transducer: `0x40` handset, `0x50`/`0x52` speakerphone, `0x60` headset |
-| 4–5 | volume level (10 steps; handled inside the phone) |
-| 6 | mic muted: `0x00`/`0x01` |
+| 2 | keypad code: `0x00` none, `0x01`–`0x0A` digits `0`–`9`, `0x0B` `*`, `0x0C` `#` |
+| 3 | audio session: `0x00` enabled, `0x03` disabled |
+| 4 | active transducer: `0x40` handset, `0x50`/`0x52` speakerphone, `0x60` headset, `0x00` none |
+| 5–6 | volume level (handled inside the phone) |
+| 7 | mic muted: `0x00`/`0x01` |
 
 Only one key registers at a time; a fast hook-flash arrives as the hold code.
 

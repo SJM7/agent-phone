@@ -8,7 +8,8 @@ from agent_phone.cx300_protocol import (VID, PID, InputState, parse_input_report
 
 def report(key=0x00, flags=0x00, audio=0x00, trans=0x40, vol=(0x70, 0x0B),
            mic=0x00, with_id=True):
-    data = bytes([key, flags, audio, trans, vol[0], vol[1], mic, 0x00])
+    # Live-verified layout: [ID 0x01,] flags, key, audio, transducer, vol, vol, mic
+    data = bytes([flags, key, audio, trans, vol[0], vol[1], mic])
     return (b"\x01" + data) if with_id else data
 
 
@@ -62,8 +63,17 @@ def test_parse_bad_input_returns_none():
     assert parse_input_report(b"") is None
     assert parse_input_report(b"\x01\x00\x00") is None
     assert parse_input_report(bytes(10)) is None
-    assert parse_input_report(b"\x02" + bytes(8)) is None   # wrong report id
-    assert parse_input_report(bytes(7)) is None
+    assert parse_input_report(b"\x02" + bytes(7)) is None   # wrong report id
+    assert parse_input_report(bytes(6)) is None
+    # live capture from the real phone: '#' pressed while on-hook
+    live = bytes.fromhex("01000c00003cb500")
+    st = parse_input_report(live)
+    assert st is not None and st.key == "#" and st.offhook is False
+    # live capture: receiver lifted (handset transducer active)
+    live2 = bytes.fromhex("0101000040d55a00")
+    st2 = parse_input_report(live2)
+    assert st2 is not None and st2.key is None and st2.offhook is True
+    assert st2.transducer == "handset"
 
 
 def test_event_detector_key_edges():

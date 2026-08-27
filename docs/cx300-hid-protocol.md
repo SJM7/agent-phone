@@ -78,16 +78,28 @@ macOS presents the whole interface as a single IOHIDDevice, so one
 `hid_open(0x095d, 0x9201)` reaches everything — always put the report ID in
 byte 0 of writes and feature reports.
 
-## Input report `0x01` (8 data bytes)
+## Input report `0x01` (8 bytes total, including the report ID)
+
+Byte positions below were verified live against this project's CX300
+(August 2026) and **differ from the community documentation**, which lists
+the keypad code before the flags — an artifact of ambiguous byte indexing
+in the original notes. On real hardware the report is 8 bytes total with
+the report ID in byte 0:
 
 | Byte | Meaning |
 |---|---|
-| 0 | keypad code: `0x00` none, `0x01`–`0x0A` digits `0`–`9`, `0x0B` `*`, `0x0C` `#` |
+| 0 | report ID `0x01` |
 | 1 | flags: `0x01` off-hook, `0x02` hold/flash, `0x04` redial, `0x08` long-press, `0x10` mute key, `0x20` delete |
-| 2 | audio session: `0x00` enabled, `0x03` disabled |
-| 3 | active transducer: `0x40` handset, `0x50` (some firmware `0x52`) speakerphone, `0x60` headset |
-| 4–5 | volume level, 10 steps from `0x70 0x0B` to `0xFF 0xFF` |
-| 6 | microphone muted: `0x00` no, `0x01` yes |
+| 2 | keypad code: `0x00` none, `0x01`–`0x0A` digits `0`–`9` (digit *d* is code *d*+1), `0x0B` `*`, `0x0C` `#` |
+| 3 | audio session: `0x00` enabled, `0x03` disabled |
+| 4 | active transducer: `0x40` handset, `0x50` (some firmware `0x52`) speakerphone, `0x60` headset, `0x00` none |
+| 5–6 | volume level (differs per active transducer) |
+| 7 | microphone muted: `0x00` no, `0x01` yes |
+
+Live captures for reference: `01 00 0c 00 00 3c b5 00` is `#` pressed while
+on-hook; `01 01 00 00 40 d5 5a 00` is the receiver lifted (off-hook flag
+set, handset transducer active). A key press is reported once with the key
+code and again with `0x00` on release.
 
 Notes: only one simultaneous keypress registers; a quick hook-flash is
 reported as the hold code; the hook switch is a transmissive optical sensor.

@@ -27,23 +27,20 @@ class InputState:
 
 
 def parse_input_report(data: bytes) -> InputState | None:
-    try:
-        if len(data) == 9 and data[0] == 0x01:
-            data = data[1:]
-        if len(data) != 8:
-            return None
-    except Exception:
+    # Live-verified layout (CX300, 2026-08): 8 bytes INCLUDING report ID 0x01,
+    # then [flags, key, audio, transducer, vol, vol, mic]. The community doc
+    # had key/flags swapped due to ambiguous byte indexing.
+    if len(data) == 8 and data[0] == 0x01:
+        data = data[1:]
+    if len(data) != 7:
         return None
-    try:
-        raw_key = data[0]
-        key = KEY_MAP.get(raw_key) if raw_key in KEY_MAP else None
-        flags = data[1]
-        audio = data[2]
-        transducer_byte = data[3]
-        vol = data[4:6]
-        mic_muted = data[6]
-    except Exception:
-        return None
+    flags = data[0]
+    raw_key = data[1]
+    key = KEY_MAP.get(raw_key) if raw_key in KEY_MAP else None
+    audio = data[2]
+    transducer_byte = data[3]
+    vol = data[4:6]
+    mic_muted = data[6]
 
     if audio != 0x00:
         audio_enabled = False
