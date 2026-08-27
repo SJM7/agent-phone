@@ -68,6 +68,22 @@ class Cx300Phone:
     def set_led(self, attention: bool) -> None:
         self._write(build_led("red" if attention else "off"))
 
+    def show_dashboard(self, top_left: str, bottom_left: str,
+                       top_right: str, bottom_right: str) -> None:
+        """Four-corner attention dashboard. Left corners are 16 chars (two
+        full text chunks), right corners 8 (one chunk), so every report is
+        a complete fixed-size packet."""
+        reports = [build_display_mode("clear"),
+                   build_display_mode("corners")]
+        for area, text, width in (("top_left", top_left, 16),
+                                  ("bottom_left", bottom_left, 16),
+                                  ("top_right", top_right, 8),
+                                  ("bottom_right", bottom_right, 8)):
+            reports.append(build_area_select(area))
+            reports += build_text(sanitize_display_text(text, width))
+        for rpt in reports:
+            self._write(rpt)
+
     def show(self, top: str, bottom: str = "") -> None:
         # Clear first so a shorter message never leaves stale characters,
         # then repaint both lines with sanitized, width-padded text.

@@ -12,6 +12,7 @@ class StubBackend:
         self.led = False
         self.led_calls = []
         self.shown = []
+        self.dashboards = []
         self.capturing = False
 
     def set_led(self, on):
@@ -20,6 +21,9 @@ class StubBackend:
 
     def show(self, top, bottom):
         self.shown.append((top, bottom))
+
+    def show_dashboard(self, tl, bl, tr, br):
+        self.dashboards.append((tl, bl, tr, br))
 
     def start_capture(self):
         self.capturing = True
@@ -173,6 +177,24 @@ def test_voice_record_uses_backend_capture(monkeypatch, tmp_path):
     d.handle_onhook()
     assert d.backend.capturing is False
     assert runs == [] and procs == []         # no push-to-talk keystrokes
+
+
+def test_dashboard_rendering(monkeypatch, tmp_path):
+    daemon, refs, focused, bind, finish = make_daemon(monkeypatch, tmp_path)
+    backend = daemon.backend
+    for i in range(3):
+        bind(i)
+    assert backend.dashboards[-1] == ("bound term-2", "all quiet", "*0", "#3")
+    finish(0)
+    assert backend.dashboards[-1] == ("done term-0", "term-0", "*1", "#3")
+    finish(1)
+    assert backend.dashboards[-1] == ("done term-1", "term-0", "*2", "#3")
+    daemon.focus_next()                       # visits term-0, clears it
+    assert backend.dashboards[-1] == ("go: term-0", "term-1", "*1", "#3")
+    daemon.focus_next()                       # last one read: quiet again
+    assert backend.dashboards[-1] == ("go: term-1", "all quiet", "*0", "#3")
+    daemon.focus_next()
+    assert backend.dashboards[-1] == ("all quiet", "all quiet", "*0", "#3")
 
 
 def test_bindings_persist_across_restart(monkeypatch, tmp_path):

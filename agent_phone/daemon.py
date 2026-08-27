@@ -147,6 +147,17 @@ class AgentPhoneDaemon:
         else:
             release()
 
+    # -- display ------------------------------------------------------------
+    def _refresh(self, headline: str) -> None:
+        """Repaint the four-corner dashboard: latest event, who's next,
+        and the waiting/bound counts labeled with their phone keys."""
+        waiting = self.router.needs_attention()
+        labels = dict(self.router.bindings())
+        key = self.router.current() or (waiting[0] if waiting else None)
+        next_line = labels.get(key, key or "") if waiting else "all quiet"
+        self.backend.show_dashboard(headline, next_line,
+                                    f"*{len(waiting)}", f"#{len(labels)}")
+
     # -- binding / focus ----------------------------------------------------
     def _load_bindings(self) -> None:
         try:
@@ -176,29 +187,31 @@ class AgentPhoneDaemon:
         ref = macfocus.frontmost_window()
         if ref is None:
             log.info("# pressed but no terminal window is frontmost")
-            self.backend.show("no terminal", "focused")
+            self._refresh("no terminal focused")
             return
         key = _window_key(ref)
         self.windows[key] = ref
         self.router.bind(key, ref.label)
         self._save_bindings()
         log.info("bound %s (%s)", key, ref.label)
-        self.backend.show("bound:", ref.label)
+        self._refresh(f"bound {ref.label}")
 
     def focus_next(self) -> None:
         self._prune_dead_windows()
         key = self.router.next_attention()
         if key is None:
             log.info("* pressed but nothing needs attention")
-            self.backend.show("all quiet", "")
+            self._refresh("all quiet")
             return
         ref = self.windows.get(key)
-        if ref is not None and macfocus.focus(ref):
+        focused = ref is not None and macfocus.focus(ref)
+        if focused:
             log.info("focused %s", key)
-            self.backend.show("attending:", ref.label)
         # Notification-log semantics: cycling to a terminal marks it read, so
         # the LED goes dark the moment the last waiting terminal is visited.
         self.router.clear_attention(key)
+        if focused:
+            self._refresh(f"go: {ref.label}")
         self._sync_led()
 
     def _prune_dead_windows(self) -> None:
@@ -238,7 +251,7 @@ class AgentPhoneDaemon:
         if self.router.mark_attention(key):
             log.info("attention: %s", key)
             label = dict(self.router.bindings()).get(key, key)
-            self.backend.show("done:", label)
+            self._refresh(f"done {label}")
         self._sync_led()
 
     def _phone_event(self, event: dict) -> None:
@@ -309,7 +322,7 @@ class UsbBackend:
         self.phone.start()
 
     def _on_connect(self) -> None:
-        self.phone.show("agent phone", "ready")
+        self.daemon._refresh("ready")
         self.phone.set_led(bool(self.daemon.router.needs_attention()))
 
     def set_led(self, on: bool) -> None:
@@ -317,6 +330,9 @@ class UsbBackend:
 
     def show(self, top: str, bottom: str) -> None:
         self.phone.show(top, bottom)
+
+    def show_dashboard(self, tl: str, bl: str, tr: str, br: str) -> None:
+        self.phone.show_dashboard(tl, bl, tr, br)
 
     def start_capture(self) -> None:
         if self._ffmpeg is not None:
@@ -424,6 +440,9 @@ class SipBackend:
 
     def show(self, top: str, bottom: str) -> None:
         pass  # VVX screen is not driven in this backend
+
+    def show_dashboard(self, tl: str, bl: str, tr: str, br: str) -> None:
+        pass
 
     def start_capture(self) -> None:
         self._buffer = bytearray()
