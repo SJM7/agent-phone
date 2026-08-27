@@ -42,8 +42,12 @@ class AgentPhoneDaemon:
     """Core logic; a backend supplies phone I/O via the handle_* methods."""
 
     def __init__(self, http_port: int = 8489,
-                 stt_command: str | None = None) -> None:
+                 stt_command: str | None = None,
+                 voice_mode: str = "claude",
+                 dictation_key: str = " ") -> None:
         self.stt_command = stt_command
+        self.voice_mode = voice_mode          # claude | record | off
+        self.dictation_key = dictation_key
         self.loop: asyncio.AbstractEventLoop | None = None
         self.backend = None            # set by main()
 
@@ -78,16 +82,43 @@ class AgentPhoneDaemon:
             self.focus_next()
 
     def handle_offhook(self) -> None:
-        log.info("receiver up: recording")
-        self.backend.start_capture()
+        if self.voice_mode == "claude":
+            # Hold Claude Code's push-to-talk key for as long as the receiver
+            # is up; its own dictation streams from the handset mic (the
+            # system default input) straight into the prompt box.
+            log.info("receiver up: holding push-to-talk")
+            self._dictation_key_event("down")
+        elif self.voice_mode == "record":
+            log.info("receiver up: recording")
+            self.backend.start_capture()
 
     def handle_onhook(self) -> None:
+        if self.voice_mode == "claude":
+            log.info("receiver down: releasing push-to-talk")
+            self._dictation_key_event("up")
+            return
+        if self.voice_mode != "record":
+            return
         wav = self.backend.stop_capture()
         if wav is None:
             return
         log.info("receiver down: %s", wav)
         assert self.loop is not None
         self.loop.run_in_executor(None, self._transcribe, wav)
+
+    def _dictation_key_event(self, direction: str) -> None:
+        script = (f'tell application "System Events" to key {direction} '
+                  f'"{self.dictation_key}"')
+        def run() -> None:
+            try:
+                subprocess.run(["osascript", "-e", script], capture_output=True,
+                               timeout=5, check=True)
+            except (subprocess.SubprocessError, OSError) as exc:
+                log.error("push-to-talk key %s failed: %s", direction, exc)
+        if self.loop is not None:
+            self.loop.run_in_executor(None, run)
+        else:
+            run()
 
     # -- binding / focus ----------------------------------------------------
     def bind_frontmost(self) -> None:
@@ -369,16 +400,28 @@ def main() -> None:
     parser.add_argument("--sip-port", type=int, default=5060)
     parser.add_argument("--rtp-port", type=int, default=4000)
     parser.add_argument("--http-port", type=int, default=8489)
+    parser.add_argument("--voice", choices=("claude", "record", "off"),
+                        default="claude",
+                        help="claude: hold Claude Code's push-to-talk key "
+                             "while the receiver is up (its dictation types "
+                             "into the prompt box); record: capture audio and "
+                             "run --stt-command; off: ignore the receiver")
+    parser.add_argument("--dictation-key", default=" ",
+                        help="key held for Claude Code push-to-talk "
+                             "(default: space)")
     parser.add_argument("--stt-command", default=None,
-                        help="speech-to-text command; {wav} is replaced with "
-                             "the recording path; stdout is the transcript "
+                        help="speech-to-text command for --voice record; "
+                             "{wav} is replaced with the recording path; "
+                             "stdout is the transcript "
                              "(e.g. 'whisper-cli -nt -f {wav}')")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    daemon = AgentPhoneDaemon(args.http_port, args.stt_command)
+    daemon = AgentPhoneDaemon(args.http_port, args.stt_command,
+                              voice_mode=args.voice,
+                              dictation_key=args.dictation_key)
     if args.backend == "usb":
         daemon.backend = UsbBackend(args.audio_device)
     else:

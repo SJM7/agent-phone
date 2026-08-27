@@ -59,7 +59,39 @@ Claude Code session and is what the daemon uses to identify which bound terminal
 finished (or started) a turn. `hook_event_name` and `cwd` are useful for
 debugging/labels; the rest is ignored.
 
-## 3. Testing manually
+## 3. Voice dictation through the receiver
+
+Claude Code has native voice dictation (v2.1.69+, [docs](https://code.claude.com/docs/en/voice-dictation.md)).
+The daemon's default `--voice claude` mode drives it from the phone: lifting
+the receiver holds Claude Code's push-to-talk key, hanging up releases it —
+the transcript lands in the prompt box for review, and you press Enter on the
+keyboard to send. That is the whole flow: `*` to the terminal that needs you,
+lift, speak, hang up, Enter.
+
+One-time setup:
+
+1. In a Claude Code session run `/voice hold` once to enable hold-to-record
+   mode (persists via settings). Leave `autoSubmit` off so hang-up never
+   sends anything by itself.
+2. Grant your terminal app Microphone permission when macOS prompts on the
+   first `/voice` use. Voice requires signing in with a Claude.ai account
+   (API-key auth doesn't have it).
+3. Make sure the phone is the system default input (macOS usually does this
+   automatically when a USB audio device with a mic is attached: System
+   Settings, Sound, Input, "Polycom CX300"). Claude Code records from the
+   system default, so this routes the handset mic into it.
+
+The push-to-talk key defaults to Space; the daemon holds Space accordingly.
+If Space bothers you (it types spaces when a prompt already has text),
+rebind `voice:pushToTalk` in `~/.claude/keybindings.json` and pass the same
+key to the daemon with `--dictation-key`.
+
+Codex CLI note: Codex currently has no native voice input (experimental
+voice shipped in v0.105 and was removed in v0.118), so for Codex-only
+terminals run the daemon with `--voice record --stt-command '...'` to use
+local transcription and clipboard paste instead.
+
+## 4. Testing manually
 
 With the daemon running (default port 8489):
 

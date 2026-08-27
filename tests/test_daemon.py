@@ -1,4 +1,5 @@
 """Daemon logic tests with a stub backend and patched macfocus."""
+from agent_phone import daemon as daemon_mod
 from agent_phone import macfocus
 from agent_phone.daemon import AgentPhoneDaemon
 from agent_phone.macfocus import WindowRef
@@ -11,6 +12,7 @@ class StubBackend:
         self.led = False
         self.led_calls = []
         self.shown = []
+        self.capturing = False
 
     def set_led(self, on):
         self.led = on
@@ -18,6 +20,13 @@ class StubBackend:
 
     def show(self, top, bottom):
         self.shown.append((top, bottom))
+
+    def start_capture(self):
+        self.capturing = True
+
+    def stop_capture(self):
+        self.capturing = False
+        return None
 
 
 def make_daemon(monkeypatch, n_windows=3):
@@ -96,3 +105,56 @@ def test_turn_start_still_clears_without_cycling(monkeypatch):
     # user just starts typing in that terminal instead of pressing *
     daemon._turn_start({"session_id": "sid-0"})
     assert daemon.backend.led is False
+
+
+def _capture_osascript(monkeypatch):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        class R:
+            stdout = ""
+        return R()
+
+    monkeypatch.setattr(daemon_mod.subprocess, "run", fake_run)
+    return calls
+
+
+def test_voice_claude_holds_and_releases_push_to_talk(monkeypatch):
+    calls = _capture_osascript(monkeypatch)
+    d = AgentPhoneDaemon(http_port=0, voice_mode="claude")
+    d.backend = StubBackend()
+    d.handle_offhook()
+    d.handle_onhook()
+    assert len(calls) == 2
+    assert calls[0][0] == "osascript" and 'key down " "' in calls[0][2]
+    assert 'key up " "' in calls[1][2]
+    assert d.backend.capturing is False       # no ffmpeg recording in this mode
+
+
+def test_voice_claude_custom_key(monkeypatch):
+    calls = _capture_osascript(monkeypatch)
+    d = AgentPhoneDaemon(http_port=0, voice_mode="claude", dictation_key="g")
+    d.backend = StubBackend()
+    d.handle_offhook()
+    assert 'key down "g"' in calls[0][2]
+
+
+def test_voice_record_uses_backend_capture(monkeypatch):
+    calls = _capture_osascript(monkeypatch)
+    d = AgentPhoneDaemon(http_port=0, voice_mode="record")
+    d.backend = StubBackend()
+    d.handle_offhook()
+    assert d.backend.capturing is True
+    d.handle_onhook()
+    assert d.backend.capturing is False
+    assert calls == []                        # no push-to-talk keystrokes
+
+
+def test_voice_off_ignores_receiver(monkeypatch):
+    calls = _capture_osascript(monkeypatch)
+    d = AgentPhoneDaemon(http_port=0, voice_mode="off")
+    d.backend = StubBackend()
+    d.handle_offhook()
+    d.handle_onhook()
+    assert calls == [] and d.backend.capturing is False

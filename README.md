@@ -107,11 +107,22 @@ device lifecycle (reader thread, keepalive, reconnect) in `agent_phone/cx300.py`
 
 ## Speech to text
 
-Bring your own engine: the daemon shells out to `--stt-command`, replacing
-`{wav}` with the recording path and reading the transcript from stdout.
+Two modes:
+
+- **`--voice claude`** (default) — uses Claude Code's own built-in dictation:
+  lifting the receiver holds its push-to-talk key, hanging up releases it,
+  and the transcript appears in the prompt box for review before you press
+  Enter. The handset mic is just the system default input, so no extra STT
+  engine is needed. Setup notes in
+  [docs/claude-code-setup.md](docs/claude-code-setup.md).
+- **`--voice record`** — for terminals without native dictation (e.g. Codex):
+  the daemon records the handset audio and shells out to `--stt-command`,
+  replacing `{wav}` with the recording path and pasting the transcript from
+  stdout into the focused terminal.
 
 ```sh
-python -m agent_phone.daemon --stt-command 'whisper-cli -nt -f {wav}'
+python -m agent_phone.daemon                    # Claude Code dictation
+python -m agent_phone.daemon --voice record --stt-command 'whisper-cli -nt -f {wav}'
 ```
 
 ## Development
