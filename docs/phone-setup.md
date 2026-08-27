@@ -70,7 +70,7 @@ seconds later.
 ## 4. Run the daemon
 
 ```sh
-uv run python -m agent_phone.daemon --stt-command 'whisper-cli -nt -f {wav}'
+uv run python -m agent_phone.daemon --backend sip --stt-command 'whisper-cli -nt -f {wav}'
 ```
 
 Then wire up Claude Code hooks — see [claude-code-setup.md](claude-code-setup.md).

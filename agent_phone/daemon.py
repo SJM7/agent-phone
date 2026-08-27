@@ -1,12 +1,17 @@
-"""The Agent Phone daemon: wires the SIP endpoint, RTP/DTMF stream, attention
-router, macOS focus layer, and Claude Code hooks together.
+"""The Agent Phone daemon: routes phone input to terminal attention.
+
+Phone-agnostic core (attention router, window focus, Claude Code hooks,
+speech-to-text) with two phone backends:
+
+  usb  Polycom CX300: HID keys/hook/LED/LCD + CoreAudio capture via ffmpeg
+  sip  Polycom VVX:   SIP registrar, MWI LED, persistent call, RTP DTMF
 
 Flow:
   #            bind the frontmost terminal window
-  Stop hook    mark that session's window as needing attention -> LED blinks
+  Stop hook    mark that session's window as needing attention -> LED
   *            focus the next window needing attention
-  off-hook     record handset audio (G.711 -> WAV), transcribe, paste into
-               the frontmost terminal on hang-up
+  off-hook     record handset audio; on hang-up transcribe and paste into
+               the frontmost terminal
 """
 from __future__ import annotations
 
@@ -15,15 +20,14 @@ import asyncio
 import logging
 import pathlib
 import shlex
+import signal
 import socket
 import subprocess
 import time
 
-from agent_phone import g711, macfocus
+from agent_phone import macfocus
 from agent_phone.attention import AttentionRouter
 from agent_phone.hookserver import HookCallbacks, HookServer
-from agent_phone.rtp import DtmfDetector, parse_rtp
-from agent_phone.sipd import CallState, Registration, UdpSipEndpoint
 
 log = logging.getLogger("agent_phone")
 
@@ -34,117 +38,81 @@ def _window_key(ref: macfocus.WindowRef) -> str:
     return f"{ref.app}:{ref.window_id}"
 
 
-class RtpReceiver(asyncio.DatagramProtocol):
-    def __init__(self, daemon: "AgentPhoneDaemon") -> None:
-        self.daemon = daemon
-        self.transport: asyncio.DatagramTransport | None = None
-
-    def connection_made(self, transport: asyncio.BaseTransport) -> None:
-        self.transport = transport  # type: ignore[assignment]
-
-    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
-        self.daemon.on_rtp(data)
-
-
 class AgentPhoneDaemon:
-    def __init__(self, local_ip: str, sip_port: int = 5060,
-                 rtp_port: int = 4000, http_port: int = 8489,
+    """Core logic; a backend supplies phone I/O via the handle_* methods."""
+
+    def __init__(self, http_port: int = 8489,
                  stt_command: str | None = None) -> None:
-        self.local_ip = local_ip
-        self.rtp_port = rtp_port
         self.stt_command = stt_command
         self.loop: asyncio.AbstractEventLoop | None = None
+        self.backend = None            # set by main()
 
         self.router = AttentionRouter()
         self.windows: dict[str, macfocus.WindowRef] = {}
         self.sessions: dict[str, str] = {}      # claude session_id -> window key
-        self.dtmf: DtmfDetector | None = None
-        self.audio_pt: int | None = None
-        self.recording: bytearray | None = None
         self._led_on = False
 
-        self.sip = UdpSipEndpoint(
-            local_ip, sip_port,
-            on_registered=self._on_registered,
-            on_call_established=self._on_call_established,
-            on_call_down=self._on_call_down,
-        )
         self.hooks = HookServer(HookCallbacks(
-            on_turn_done=self._on_turn_done,
-            on_turn_start=self._on_turn_start,
-            on_phone_event=self._on_phone_event,
+            on_turn_done=lambda p: self._call_soon(self._turn_done, p),
+            on_turn_start=lambda p: self._call_soon(self._turn_start, p),
+            on_phone_event=lambda e: self._call_soon(self._phone_event, e),
         ), port=http_port)
 
-    # -- lifecycle ----------------------------------------------------------
     async def run(self) -> None:
         self.loop = asyncio.get_running_loop()
-        await self.loop.create_datagram_endpoint(
-            lambda: self.sip, local_addr=("0.0.0.0", self.sip.local_port))
-        await self.loop.create_datagram_endpoint(
-            lambda: RtpReceiver(self), local_addr=("0.0.0.0", self.rtp_port))
+        await self.backend.start(self)
         self.hooks.start()
-        log.info("agent-phone up: SIP %s:%d, RTP %d, hooks http://127.0.0.1:%d",
-                 self.local_ip, self.sip.local_port, self.rtp_port,
-                 self.hooks.port)
+        log.info("agent-phone up (%s backend), hooks on http://127.0.0.1:%d",
+                 self.backend.name, self.hooks.port)
         await asyncio.Event().wait()
 
     def _call_soon(self, fn, *args) -> None:
-        """Run fn on the event loop thread (hook callbacks arrive on threads)."""
+        if self.loop is not None:
+            self.loop.call_soon_threadsafe(fn, *args)
+
+    # -- phone input (backends call these, loop thread) ---------------------
+    def handle_key(self, digit: str) -> None:
+        if digit == "#":
+            self.bind_frontmost()
+        elif digit == "*":
+            self.focus_next()
+
+    def handle_offhook(self) -> None:
+        log.info("receiver up: recording")
+        self.backend.start_capture()
+
+    def handle_onhook(self) -> None:
+        wav = self.backend.stop_capture()
+        if wav is None:
+            return
+        log.info("receiver down: %s", wav)
         assert self.loop is not None
-        self.loop.call_soon_threadsafe(fn, *args)
+        self.loop.run_in_executor(None, self._transcribe, wav)
 
-    # -- SIP events ---------------------------------------------------------
-    def _on_registered(self, reg: Registration) -> None:
-        if self.sip.call is None:
-            self.sip.place_call(self.rtp_port)
-
-    def _on_call_established(self, call: CallState) -> None:
-        self.dtmf = DtmfDetector(call.dtmf_pt if call.dtmf_pt is not None else 101)
-        self.audio_pt = call.audio_pt if call.audio_pt is not None else 0
-        self._sync_led()
-
-    def _on_call_down(self) -> None:
-        self.dtmf = None
-        assert self.loop is not None
-        self.loop.call_later(3.0, lambda: self.sip.registration
-                             and self.sip.call is None
-                             and self.sip.place_call(self.rtp_port))
-
-    # -- RTP / keypad -------------------------------------------------------
-    def on_rtp(self, data: bytes) -> None:
-        if self.dtmf is not None:
-            digit = self.dtmf.feed(data)
-            if digit == "#":
-                self.bind_frontmost()
-            elif digit == "*":
-                self.focus_next()
-        if self.recording is not None and self.audio_pt is not None:
-            try:
-                pkt = parse_rtp(data)
-            except ValueError:
-                return
-            if pkt.payload_type == self.audio_pt:
-                self.recording.extend(pkt.payload)
-
+    # -- binding / focus ----------------------------------------------------
     def bind_frontmost(self) -> None:
         ref = macfocus.frontmost_window()
         if ref is None:
             log.info("# pressed but no terminal window is frontmost")
+            self.backend.show("no terminal", "focused")
             return
         key = _window_key(ref)
         self.windows[key] = ref
         self.router.bind(key, ref.label)
         log.info("bound %s (%s)", key, ref.label)
+        self.backend.show("bound:", ref.label)
 
     def focus_next(self) -> None:
         self._prune_dead_windows()
         key = self.router.next_attention()
         if key is None:
             log.info("* pressed but nothing needs attention")
+            self.backend.show("all quiet", "")
             return
         ref = self.windows.get(key)
         if ref is not None and macfocus.focus(ref):
             log.info("focused %s", key)
+            self.backend.show("attending:", ref.label)
         self._sync_led()
 
     def _prune_dead_windows(self) -> None:
@@ -157,9 +125,6 @@ class AgentPhoneDaemon:
                         del self.sessions[sid]
 
     # -- Claude Code hooks --------------------------------------------------
-    def _on_turn_start(self, payload: dict) -> None:
-        self._call_soon(self._turn_start, payload)
-
     def _turn_start(self, payload: dict) -> None:
         sid = payload.get("session_id")
         if not sid:
@@ -172,9 +137,6 @@ class AgentPhoneDaemon:
             self.router.clear_attention(key)
             self._sync_led()
 
-    def _on_turn_done(self, payload: dict) -> None:
-        self._call_soon(self._turn_done, payload)
-
     def _turn_done(self, payload: dict) -> None:
         sid = payload.get("session_id")
         key = self.sessions.get(sid or "")
@@ -183,29 +145,20 @@ class AgentPhoneDaemon:
             return
         if self.router.mark_attention(key):
             log.info("attention: %s", key)
+            label = dict(self.router.bindings()).get(key, key)
+            self.backend.show("done:", label)
         self._sync_led()
 
-    # -- phone hook state / recording ---------------------------------------
-    def _on_phone_event(self, event: dict) -> None:
-        self._call_soon(self._phone_event, event)
-
     def _phone_event(self, event: dict) -> None:
+        """Telephony events from a SIP phone's telNotification POSTs."""
         kind = event.get("type", "")
         if kind == "OffHookEvent":
-            self.recording = bytearray()
-            log.info("receiver up: recording")
-        elif kind == "OnHookEvent" and self.recording is not None:
-            pcm_ulaw = bytes(self.recording)
-            self.recording = None
-            log.info("receiver down: %d bytes of audio", len(pcm_ulaw))
-            if pcm_ulaw:
-                assert self.loop is not None
-                self.loop.run_in_executor(None, self._transcribe, pcm_ulaw)
+            self.handle_offhook()
+        elif kind == "OnHookEvent":
+            self.handle_onhook()
 
-    def _transcribe(self, pcm_ulaw: bytes) -> None:
-        RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
-        wav_path = RECORDINGS_DIR / f"utterance-{int(time.time())}.wav"
-        wav_path.write_bytes(g711.wav_bytes(g711.ulaw_to_pcm16(pcm_ulaw)))
+    # -- speech to text -----------------------------------------------------
+    def _transcribe(self, wav_path: pathlib.Path) -> None:
         if not self.stt_command:
             log.info("no --stt-command configured; audio saved to %s", wav_path)
             return
@@ -222,7 +175,6 @@ class AgentPhoneDaemon:
             self._call_soon(self._deliver_transcript, text)
 
     def _deliver_transcript(self, text: str) -> None:
-        """Put the transcript on the clipboard and paste into the front app."""
         try:
             subprocess.run(["pbcopy"], input=text.encode(), timeout=5, check=True)
             subprocess.run(
@@ -238,7 +190,161 @@ class AgentPhoneDaemon:
         want = bool(self.router.needs_attention())
         if want != self._led_on:
             self._led_on = want
-            self.sip.set_mwi(want)
+            self.backend.set_led(want)
+
+
+class UsbBackend:
+    """Polycom CX300 over USB HID + CoreAudio capture through ffmpeg."""
+
+    name = "usb"
+
+    def __init__(self, audio_device: str = "Polycom CX300") -> None:
+        self.audio_device = audio_device
+        self.phone = None
+        self.daemon: AgentPhoneDaemon | None = None
+        self._ffmpeg: subprocess.Popen | None = None
+        self._wav: pathlib.Path | None = None
+
+    async def start(self, daemon: AgentPhoneDaemon) -> None:
+        from agent_phone.cx300 import Cx300Phone
+        self.daemon = daemon
+        self.phone = Cx300Phone(
+            on_key=lambda d: daemon._call_soon(daemon.handle_key, d),
+            on_offhook=lambda: daemon._call_soon(daemon.handle_offhook),
+            on_onhook=lambda: daemon._call_soon(daemon.handle_onhook),
+            on_connect=lambda: daemon._call_soon(self._on_connect),
+        )
+        self.phone.start()
+
+    def _on_connect(self) -> None:
+        self.phone.show("agent phone", "ready")
+        self.phone.set_led(bool(self.daemon.router.needs_attention()))
+
+    def set_led(self, on: bool) -> None:
+        self.phone.set_led(on)
+
+    def show(self, top: str, bottom: str) -> None:
+        self.phone.show(top, bottom)
+
+    def start_capture(self) -> None:
+        if self._ffmpeg is not None:
+            return
+        RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
+        self._wav = RECORDINGS_DIR / f"utterance-{int(time.time())}.wav"
+        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error",
+               "-f", "avfoundation", "-i", f":{self.audio_device}",
+               "-ar", "16000", "-ac", "1", "-y", str(self._wav)]
+        try:
+            self._ffmpeg = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+                                            stderr=subprocess.PIPE)
+        except OSError as exc:
+            log.error("could not start ffmpeg capture: %s", exc)
+            self._ffmpeg = None
+            self._wav = None
+
+    def stop_capture(self) -> pathlib.Path | None:
+        proc, wav = self._ffmpeg, self._wav
+        self._ffmpeg = None
+        self._wav = None
+        if proc is None:
+            return None
+        proc.send_signal(signal.SIGINT)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        if wav is not None and wav.exists() and wav.stat().st_size > 44:
+            return wav
+        log.warning("capture produced no audio")
+        return None
+
+
+class SipBackend:
+    """Polycom VVX over SIP/RTP (see docs/phone-setup.md)."""
+
+    name = "sip"
+
+    def __init__(self, local_ip: str, sip_port: int = 5060,
+                 rtp_port: int = 4000) -> None:
+        self.local_ip = local_ip
+        self.sip_port = sip_port
+        self.rtp_port = rtp_port
+        self.daemon: AgentPhoneDaemon | None = None
+        self.sip = None
+        self.dtmf = None
+        self.audio_pt: int | None = None
+        self._buffer: bytearray | None = None
+
+    async def start(self, daemon: AgentPhoneDaemon) -> None:
+        from agent_phone.rtp import DtmfDetector, parse_rtp
+        from agent_phone.sipd import UdpSipEndpoint
+        self.daemon = daemon
+        self._parse_rtp = parse_rtp
+        self._DtmfDetector = DtmfDetector
+
+        self.sip = UdpSipEndpoint(
+            self.local_ip, self.sip_port,
+            on_registered=lambda reg: self.sip.call is None
+            and self.sip.place_call(self.rtp_port),
+            on_call_established=self._on_call,
+            on_call_down=self._on_call_down,
+        )
+        loop = asyncio.get_running_loop()
+        await loop.create_datagram_endpoint(
+            lambda: self.sip, local_addr=("0.0.0.0", self.sip_port))
+
+        backend = self
+
+        class _Rtp(asyncio.DatagramProtocol):
+            def datagram_received(self, data: bytes, addr) -> None:
+                backend._on_rtp(data)
+
+        await loop.create_datagram_endpoint(
+            _Rtp, local_addr=("0.0.0.0", self.rtp_port))
+
+    def _on_call(self, call) -> None:
+        self.dtmf = self._DtmfDetector(call.dtmf_pt if call.dtmf_pt is not None
+                                       else 101)
+        self.audio_pt = call.audio_pt if call.audio_pt is not None else 0
+
+    def _on_call_down(self) -> None:
+        self.dtmf = None
+        assert self.daemon and self.daemon.loop
+        self.daemon.loop.call_later(
+            3.0, lambda: self.sip.registration and self.sip.call is None
+            and self.sip.place_call(self.rtp_port))
+
+    def _on_rtp(self, data: bytes) -> None:
+        if self.dtmf is not None:
+            digit = self.dtmf.feed(data)
+            if digit is not None:
+                self.daemon.handle_key(digit)
+        if self._buffer is not None and self.audio_pt is not None:
+            try:
+                pkt = self._parse_rtp(data)
+            except ValueError:
+                return
+            if pkt.payload_type == self.audio_pt:
+                self._buffer.extend(pkt.payload)
+
+    def set_led(self, on: bool) -> None:
+        self.sip.set_mwi(on)
+
+    def show(self, top: str, bottom: str) -> None:
+        pass  # VVX screen is not driven in this backend
+
+    def start_capture(self) -> None:
+        self._buffer = bytearray()
+
+    def stop_capture(self) -> pathlib.Path | None:
+        from agent_phone import g711
+        buf, self._buffer = self._buffer, None
+        if not buf:
+            return None
+        RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
+        wav = RECORDINGS_DIR / f"utterance-{int(time.time())}.wav"
+        wav.write_bytes(g711.wav_bytes(g711.ulaw_to_pcm16(bytes(buf))))
+        return wav
 
 
 def _default_local_ip() -> str:
@@ -252,7 +358,11 @@ def _default_local_ip() -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Agent Phone daemon")
-    parser.add_argument("--ip", default=None, help="local IP the phone can reach")
+    parser.add_argument("--backend", choices=("usb", "sip"), default="usb")
+    parser.add_argument("--audio-device", default="Polycom CX300",
+                        help="CoreAudio input name (usb backend)")
+    parser.add_argument("--ip", default=None,
+                        help="local IP the phone can reach (sip backend)")
     parser.add_argument("--sip-port", type=int, default=5060)
     parser.add_argument("--rtp-port", type=int, default=4000)
     parser.add_argument("--http-port", type=int, default=8489)
@@ -265,8 +375,12 @@ def main() -> None:
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    daemon = AgentPhoneDaemon(args.ip or _default_local_ip(), args.sip_port,
-                              args.rtp_port, args.http_port, args.stt_command)
+    daemon = AgentPhoneDaemon(args.http_port, args.stt_command)
+    if args.backend == "usb":
+        daemon.backend = UsbBackend(args.audio_device)
+    else:
+        daemon.backend = SipBackend(args.ip or _default_local_ip(),
+                                    args.sip_port, args.rtp_port)
     try:
         asyncio.run(daemon.run())
     except KeyboardInterrupt:

@@ -5,7 +5,7 @@ description = "Repurpose a Polycom VVX 300 desk phone as a control surface for p
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
-dependencies = []
+dependencies = ["hidapi>=0.14"]
 
 [dependency-groups]
 dev = ["pytest>=8"]

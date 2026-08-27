@@ -49,6 +49,50 @@ NOTIFYs, and because on-hook keypresses are invisible on the network, the
 daemon holds a persistent auto-answered call so `#`/`*` arrive as RFC 2833
 DTMF and handset audio streams as G.711. Setup: [docs/phone-setup.md](docs/phone-setup.md).
 
+## CX300 HID protocol notes
+
+The CX300 (USB VID `095d`, PID `9201`) exposes four interfaces: USB Audio
+Class 1.0 control/capture/playback (16 kHz, 16-bit, mono — class-compliant,
+driverless) and one HID interface carrying two top-level collections:
+Telephony (usage page `0x0B`) for input, and a vendor page (`0xFF99`) for the
+display and status LED. macOS presents both collections as a single
+IOHIDDevice, so one `hid_open(0x095d, 0x9201)` covers everything. The
+protocol below was originally reverse-engineered by Bobbie Smulders and
+documented by [probonopd](https://gist.github.com/probonopd/a93f65560de35ebba095f7c97a68db54)
+([OpenPhone](https://github.com/probonopd/OpenPhone)) and
+[OE4AMW/cx300-control](https://github.com/OE4AMW/cx300-control); everything
+here is verified against this repo's own phone.
+
+### Input report `0x01` (8 data bytes, interrupt IN)
+
+| Byte | Meaning |
+|---|---|
+| 0 | keypad code: `0x00` none, `0x01`–`0x0A` digits `0`–`9`, `0x0B` `*`, `0x0C` `#` |
+| 1 | flags: `0x01` off-hook, `0x02` hold/flash, `0x04` redial, `0x08` long-press, `0x10` mute key, `0x20` delete |
+| 2 | audio session: `0x00` enabled, `0x03` disabled |
+| 3 | active transducer: `0x40` handset, `0x50`/`0x52` speakerphone, `0x60` headset |
+| 4–5 | volume level (10 steps; handled inside the phone) |
+| 6 | mic muted: `0x00`/`0x01` |
+
+Only one key registers at a time; a fast hook-flash arrives as the hold code.
+
+### Output and feature reports (byte 0 is the report ID)
+
+| Report | Bytes | Meaning |
+|---|---|---|
+| `0x13` output | `[0x13, mode]` | display mode: `0x00` clear, `0x0D` four corners, `0x15` two lines |
+| `0x14` output | `[0x14, area, 0x80]` | select write area: `0x01`–`0x04` corners (TL, BL, TR, BR), `0x05` top line, `0x0A` bottom line |
+| `0x15` output | `[0x15, flag]` + up to 8 chars UTF-16LE | write text; flag `0x00` = more chunks follow, `0x80` = final chunk |
+| `0x16` output | `[0x16, color]` | status LED: `0x01` green, `0x03` red, `0x04` orange-red, `0x05` orange, `0x06` DND pattern, `0x07` off, `0x08` green/orange |
+| `0x17` feature | `[0x17, lcid, 0x04, 0x01, 0x02]` | init/keepalive; `lcid` is a Microsoft locale id (`0x09` = English). Must be resent every ~30 s or the phone reverts to its Lync sign-in screen |
+
+Audio needs no initialization and the phone routes handset/speaker/headset
+itself, merely reporting the active route. Ringing is host-driven: set an LED
+state and play ring audio to the speaker yourself.
+
+The codec for all of this lives in `agent_phone/cx300_protocol.py`; the
+device lifecycle (reader thread, keepalive, reconnect) in `agent_phone/cx300.py`.
+
 ## Speech to text
 
 Bring your own engine: the daemon shells out to `--stt-command`, replacing

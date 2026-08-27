@@ -1,0 +1,156 @@
+"""USB transport for the Polycom CX300.
+
+Wraps the pure protocol codec (cx300_protocol) with the device lifecycle:
+a reader thread turning HID input reports into callbacks, a keepalive
+timer that stops the phone from falling back to its Lync sign-in screen,
+and write helpers for the LED and LCD. Reconnects if the phone is
+unplugged and replugged.
+
+The `hid` module (hidapi package) is imported lazily so the rest of the
+package stays importable without the native library.
+"""
+from __future__ import annotations
+
+import logging
+import threading
+from typing import Callable
+
+from agent_phone.cx300_protocol import (VID, PID, EventDetector,
+                                        build_area_select, build_display_mode,
+                                        build_keepalive, build_led, build_text,
+                                        parse_input_report)
+
+log = logging.getLogger(__name__)
+
+KEEPALIVE_INTERVAL = 25.0
+RECONNECT_INTERVAL = 3.0
+
+
+class Cx300Phone:
+    def __init__(self,
+                 on_key: Callable[[str], None],
+                 on_offhook: Callable[[], None],
+                 on_onhook: Callable[[], None],
+                 on_connect: Callable[[], None] | None = None) -> None:
+        self.on_key = on_key
+        self.on_offhook = on_offhook
+        self.on_onhook = on_onhook
+        self.on_connect = on_connect
+        self._dev = None
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    # -- lifecycle ----------------------------------------------------------
+    def start(self) -> None:
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, name="cx300",
+                                        daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=2)
+        with self._lock:
+            if self._dev is not None:
+                try:
+                    self._dev.close()
+                finally:
+                    self._dev = None
+
+    @property
+    def connected(self) -> bool:
+        return self._dev is not None
+
+    # -- outputs ------------------------------------------------------------
+    def set_led(self, attention: bool) -> None:
+        self._write(build_led("red" if attention else "off"))
+
+    def show(self, top: str, bottom: str = "") -> None:
+        reports = [build_display_mode("two_line"), build_area_select("top_line")]
+        reports += build_text(top[:24])
+        reports.append(build_area_select("bottom_line"))
+        reports += build_text(bottom[:24])
+        for rpt in reports:
+            self._write(rpt)
+
+    def _write(self, report: bytes) -> None:
+        with self._lock:
+            if self._dev is None:
+                return
+            try:
+                self._dev.write(report)
+            except OSError as exc:
+                log.warning("HID write failed: %s", exc)
+                self._drop()
+
+    def _drop(self) -> None:
+        if self._dev is not None:
+            try:
+                self._dev.close()
+            except OSError:
+                pass
+            self._dev = None
+
+    # -- reader thread ------------------------------------------------------
+    def _run(self) -> None:
+        import hid
+        while not self._stop.is_set():
+            try:
+                dev = hid.device()
+                dev.open(VID, PID)
+            except (OSError, IOError):
+                self._stop.wait(RECONNECT_INTERVAL)
+                continue
+            with self._lock:
+                self._dev = dev
+            log.info("CX300 connected")
+            try:
+                dev.send_feature_report(build_keepalive())
+            except OSError:
+                pass
+            if self.on_connect:
+                self._safely(self.on_connect)
+            self._read_loop(dev)
+            with self._lock:
+                self._drop()
+            if not self._stop.is_set():
+                log.warning("CX300 disconnected; retrying")
+
+    def _read_loop(self, dev) -> None:
+        detector = EventDetector()
+        last_keepalive = 0.0
+        import time
+        while not self._stop.is_set():
+            now = time.monotonic()
+            if now - last_keepalive > KEEPALIVE_INTERVAL:
+                last_keepalive = now
+                try:
+                    with self._lock:
+                        dev.send_feature_report(build_keepalive())
+                except OSError:
+                    return
+            try:
+                data = dev.read(64, timeout_ms=250)
+            except OSError:
+                return
+            if not data:
+                continue
+            state = parse_input_report(bytes(data))
+            if state is None:
+                continue
+            for event, arg in detector.feed(state):
+                if event == "key" and arg is not None:
+                    self._safely(self.on_key, arg)
+                elif event == "offhook":
+                    self._safely(self.on_offhook)
+                elif event == "onhook":
+                    self._safely(self.on_onhook)
+
+    @staticmethod
+    def _safely(fn, *args) -> None:
+        try:
+            fn(*args)
+        except Exception:
+            log.exception("CX300 callback error")
