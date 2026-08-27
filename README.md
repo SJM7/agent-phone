@@ -56,12 +56,20 @@ Class 1.0 control/capture/playback (16 kHz, 16-bit, mono — class-compliant,
 driverless) and one HID interface carrying two top-level collections:
 Telephony (usage page `0x0B`) for input, and a vendor page (`0xFF99`) for the
 display and status LED. macOS presents both collections as a single
-IOHIDDevice, so one `hid_open(0x095d, 0x9201)` covers everything. The
-protocol below was originally reverse-engineered by Bobbie Smulders and
-documented by [probonopd](https://gist.github.com/probonopd/a93f65560de35ebba095f7c97a68db54)
-([OpenPhone](https://github.com/probonopd/OpenPhone)) and
-[OE4AMW/cx300-control](https://github.com/OE4AMW/cx300-control); everything
-here is verified against this repo's own phone.
+IOHIDDevice, so one `hid_open(0x095d, 0x9201)` covers everything.
+
+None of this is documented by Polycom: the protocol exists in public because
+**Bobbie Smulders** reverse-engineered it (CX300Control, 2018 — his repo and
+writeup have since vanished from the live web; archived links are in the
+full doc), **probonopd** documented it and built
+[OpenPhone](https://github.com/probonopd/OpenPhone),
+**OE4AMW** preserved and extended the work in
+[cx300-control](https://github.com/OE4AMW/cx300-control), and
+**Tomasz Ostrowski** added a tSIP plugin and hardware teardown. This repo
+carries the complete protocol — with history, archived sources, and known
+unknowns — in [docs/cx300-hid-protocol.md](docs/cx300-hid-protocol.md) so it
+can't vanish again. Everything below is verified against this repo's own
+phone.
 
 ### Input report `0x01` (8 data bytes, interrupt IN)
 
