@@ -3,7 +3,8 @@ import pytest
 
 from agent_phone.cx300_protocol import (VID, PID, InputState, parse_input_report,
                             EventDetector, build_led, build_display_mode,
-                            build_area_select, build_text, build_keepalive)
+                            build_area_select, build_text, build_keepalive,
+                            sanitize_display_text)
 
 
 def report(key=0x00, flags=0x00, audio=0x00, trans=0x40, vol=(0x70, 0x0B),
@@ -144,3 +145,16 @@ def test_build_text_chunks():
 def test_build_keepalive():
     assert build_keepalive() == bytes([0x17, 0x09, 0x04, 0x01, 0x02])
     assert build_keepalive(lcid=0x07) == bytes([0x17, 0x07, 0x04, 0x01, 0x02])
+
+
+def test_sanitize_display_text():
+    # a real Terminal.app title: em dashes, spinner glyph, dimension marker
+    title = "Programming — ✳ Agent Phone — caffeinate ◂ claude — 280×70"
+    out = sanitize_display_text(title)
+    assert out == "Programming - Agent "
+    assert len(out) == 20
+    assert sanitize_display_text("hi") == "hi" + " " * 18       # padded
+    assert sanitize_display_text("") == " " * 20               # full blank line
+    assert sanitize_display_text("a  b\tc") == "a b c".ljust(20)
+    assert sanitize_display_text("wide", width=6) == "wide  "
+    assert sanitize_display_text("“quoted”…") == '"quoted"...'.ljust(20)

@@ -18,7 +18,8 @@ from typing import Callable
 from agent_phone.cx300_protocol import (VID, PID, EventDetector,
                                         build_area_select, build_display_mode,
                                         build_keepalive, build_led, build_text,
-                                        parse_input_report)
+                                        parse_input_report,
+                                        sanitize_display_text)
 
 log = logging.getLogger(__name__)
 
@@ -68,10 +69,14 @@ class Cx300Phone:
         self._write(build_led("red" if attention else "off"))
 
     def show(self, top: str, bottom: str = "") -> None:
-        reports = [build_display_mode("two_line"), build_area_select("top_line")]
-        reports += build_text(top[:24])
+        # Clear first so a shorter message never leaves stale characters,
+        # then repaint both lines with sanitized, width-padded text.
+        reports = [build_display_mode("clear"),
+                   build_display_mode("two_line"),
+                   build_area_select("top_line")]
+        reports += build_text(sanitize_display_text(top))
         reports.append(build_area_select("bottom_line"))
-        reports += build_text(bottom[:24])
+        reports += build_text(sanitize_display_text(bottom))
         for rpt in reports:
             self._write(rpt)
 

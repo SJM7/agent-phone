@@ -130,3 +130,23 @@ def build_text(text: str) -> List[bytes]:
 
 def build_keepalive(lcid: int = 0x09) -> bytes:
     return bytes([0x17, lcid, 0x04, 0x01, 0x02])
+
+
+_DISPLAY_REPLACEMENTS = {"—": "-", "–": "-", "’": "'", "‘": "'", "“": '"',
+                         "”": '"', "×": "x", "…": "..."}
+
+
+def sanitize_display_text(text: str, width: int = 20) -> str:
+    """Make text safe for the CX300's tiny LCD font: fancy punctuation to
+    ASCII, everything non-printable-ASCII dropped, whitespace collapsed,
+    then truncated and space-padded to `width` so a new write fully
+    overpaints whatever was on the line before."""
+    chars = []
+    for ch in text:
+        if ch.isspace():
+            ch = " "
+        for c in _DISPLAY_REPLACEMENTS.get(ch, ch):
+            if 0x20 <= ord(c) < 0x7F:
+                chars.append(c)
+    collapsed = " ".join("".join(chars).split())
+    return collapsed[:width].ljust(width)
