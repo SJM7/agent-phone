@@ -1,4 +1,4 @@
-# ☎️ Agent Phone
+# Agent Phone
 
 <p align="center">
   <img src="assets/polycom-cx300.webp" alt="Polycom CX300 desk phone" width="420">
@@ -39,7 +39,7 @@ this job: it's not a network phone at all, just a USB composite device —
 a mono 16 kHz speaker/mic pair plus HID for the keypad, hook switch, and
 indicator light. macOS enumerates the audio with zero drivers. The daemon
 reads keypad and hook events over HID and captures dictation straight from
-CoreAudio. *(USB HID backend in progress — see status below.)*
+CoreAudio.
 
 ### SIP phones — Polycom VVX series
 
@@ -57,19 +57,6 @@ Bring your own engine: the daemon shells out to `--stt-command`, replacing
 ```sh
 python -m agent_phone.daemon --stt-command 'whisper-cli -nt -f {wav}'
 ```
-
-## Status
-
-Early development, moving fast.
-
-| Piece | State |
-|---|---|
-| Attention routing (`#` bind, `*` cycle, LED policy) | ✅ built + tested |
-| macOS window binding/focus (Terminal.app, iTerm2) | ✅ built + tested |
-| Claude Code hook server + hook script | ✅ built + tested |
-| SIP/VVX backend (registrar, MWI, persistent call, DTMF, G.711) | ✅ built + tested, not yet run against hardware |
-| **CX300 USB backend (HID keys/hook/LED + CoreAudio capture)** | 🚧 in progress |
-| Speech-to-text plumbing | ✅ wired, engine of your choice |
 
 ## Development
 
