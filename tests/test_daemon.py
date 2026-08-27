@@ -174,6 +174,27 @@ def test_voice_record_uses_backend_capture(monkeypatch):
     assert runs == [] and procs == []         # no push-to-talk keystrokes
 
 
+def test_bindings_persist_across_restart(monkeypatch, tmp_path):
+    path = tmp_path / "bindings.json"
+    monkeypatch.setattr(macfocus, "exists", lambda ref: True)
+    ref = WindowRef(app="Terminal", window_id=42, tab_index=1, label="term-42")
+    monkeypatch.setattr(macfocus, "frontmost_window", lambda: ref)
+
+    d1 = AgentPhoneDaemon(http_port=0, bindings_path=path)
+    d1.backend = StubBackend()
+    d1.bind_frontmost()
+    assert path.exists()
+
+    d2 = AgentPhoneDaemon(http_port=0, bindings_path=path)   # fresh "restart"
+    d2.backend = StubBackend()
+    assert d2.router.bindings() == [("Terminal:42", "term-42")]
+    assert d2.windows["Terminal:42"] == ref
+    # a session can link and mark attention right away after restart
+    d2._turn_start({"session_id": "s1"})
+    d2._turn_done({"session_id": "s1"})
+    assert d2.backend.led is True
+
+
 def test_voice_off_ignores_receiver(monkeypatch):
     runs, procs = _capture_osascript(monkeypatch)
     d = AgentPhoneDaemon(http_port=0, voice_mode="off")

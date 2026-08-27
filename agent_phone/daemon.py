@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import pathlib
 import shlex
@@ -32,6 +33,7 @@ from agent_phone.hookserver import HookCallbacks, HookServer
 log = logging.getLogger("agent_phone")
 
 RECORDINGS_DIR = pathlib.Path.home() / ".agent-phone" / "recordings"
+BINDINGS_PATH = pathlib.Path.home() / ".agent-phone" / "bindings.json"
 
 
 def _window_key(ref: macfocus.WindowRef) -> str:
@@ -44,7 +46,8 @@ class AgentPhoneDaemon:
     def __init__(self, http_port: int = 8489,
                  stt_command: str | None = None,
                  voice_mode: str = "claude",
-                 dictation_key: str = " ") -> None:
+                 dictation_key: str = " ",
+                 bindings_path: pathlib.Path = BINDINGS_PATH) -> None:
         self.stt_command = stt_command
         self.voice_mode = voice_mode          # claude | record | off
         self.dictation_key = dictation_key
@@ -56,6 +59,8 @@ class AgentPhoneDaemon:
         self.windows: dict[str, macfocus.WindowRef] = {}
         self.sessions: dict[str, str] = {}      # claude session_id -> window key
         self._led_on = False
+        self._bindings_path = bindings_path
+        self._load_bindings()
 
         self.hooks = HookServer(HookCallbacks(
             on_turn_done=lambda p: self._call_soon(self._turn_done, p),
@@ -143,6 +148,30 @@ class AgentPhoneDaemon:
             release()
 
     # -- binding / focus ----------------------------------------------------
+    def _load_bindings(self) -> None:
+        try:
+            entries = json.loads(self._bindings_path.read_text())
+        except (OSError, ValueError):
+            return
+        for entry in entries:
+            try:
+                ref = macfocus.WindowRef.from_dict(entry)
+            except (KeyError, TypeError):
+                continue
+            key = _window_key(ref)
+            self.windows[key] = ref
+            self.router.bind(key, ref.label)
+        if self.windows:
+            log.info("restored %d binding(s)", len(self.windows))
+
+    def _save_bindings(self) -> None:
+        try:
+            self._bindings_path.parent.mkdir(parents=True, exist_ok=True)
+            self._bindings_path.write_text(json.dumps(
+                [ref.to_dict() for ref in self.windows.values()], indent=2))
+        except OSError as exc:
+            log.warning("could not save bindings: %s", exc)
+
     def bind_frontmost(self) -> None:
         ref = macfocus.frontmost_window()
         if ref is None:
@@ -152,6 +181,7 @@ class AgentPhoneDaemon:
         key = _window_key(ref)
         self.windows[key] = ref
         self.router.bind(key, ref.label)
+        self._save_bindings()
         log.info("bound %s (%s)", key, ref.label)
         self.backend.show("bound:", ref.label)
 
@@ -172,13 +202,17 @@ class AgentPhoneDaemon:
         self._sync_led()
 
     def _prune_dead_windows(self) -> None:
+        pruned = False
         for key, ref in list(self.windows.items()):
             if not macfocus.exists(ref):
                 self.router.unbind(key)
                 del self.windows[key]
+                pruned = True
                 for sid, wkey in list(self.sessions.items()):
                     if wkey == key:
                         del self.sessions[sid]
+        if pruned:
+            self._save_bindings()
 
     # -- Claude Code hooks --------------------------------------------------
     def _turn_start(self, payload: dict) -> None:
@@ -187,6 +221,8 @@ class AgentPhoneDaemon:
             return
         ref = macfocus.frontmost_window()
         if ref is not None and _window_key(ref) in self.windows:
+            if self.sessions.get(sid) != _window_key(ref):
+                log.info("linked session %s -> %s", sid, _window_key(ref))
             self.sessions[sid] = _window_key(ref)
         key = self.sessions.get(sid)
         if key:
