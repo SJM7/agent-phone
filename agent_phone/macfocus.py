@@ -68,6 +68,7 @@ TERMINAL_FOCUS_SCRIPT = """\
 tell application "Terminal"
 	if not (exists window id {window_id}) then return "MISSING"
 	set w to window id {window_id}
+	if miniaturized of w then set miniaturized of w to false
 	if {tab_index} > 0 and {tab_index} <= (count tabs of w) then
 		set selected of tab {tab_index} of w to true
 	end if
@@ -110,6 +111,7 @@ ITERM_FOCUS_SCRIPT = """\
 tell application "iTerm2"
 	if not (exists window id {window_id}) then return "MISSING"
 	set w to window id {window_id}
+	if miniaturized of w then set miniaturized of w to false
 	repeat with t in tabs of w
 		repeat with s in sessions of t
 			if id of s is {session_id} then
