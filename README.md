@@ -23,6 +23,12 @@ phone's light blink.
 No PBX, no cloud telephony, no browser extension. One daemon on your Mac and
 a $20-on-eBay desk phone.
 
+## Setup
+
+The complete walkthrough — hardware, daemon, macOS permissions, and hook
+configuration for every supported harness — is in
+[docs/getting-started.md](docs/getting-started.md).
+
 ## The keypad
 
 | Control | Action |
