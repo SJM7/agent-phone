@@ -91,20 +91,54 @@ class AgentPhoneDaemon:
         elif digit == "0":
             self.minimize_all()
 
+    def _detect_agent(self, ref: macfocus.WindowRef) -> str | None:
+        """Which harness runs in this window, from its tty's process list.
+
+        Works before any hook has fired (a freshly opened terminal has
+        submitted no prompt yet). Last match wins so the most recently
+        started harness decides if a tty somehow hosts traces of both.
+        """
+        term = macfocus.tty(ref)
+        if not term:
+            return None
+        try:
+            out = subprocess.run(
+                ["ps", "-t", term.removeprefix("/dev/"), "-o", "command="],
+                capture_output=True, text=True, timeout=5)
+        except (subprocess.SubprocessError, OSError):
+            return None
+        agent = None
+        for line in out.stdout.lower().splitlines():
+            if "codex" in line:
+                agent = "codex"
+            elif "claude" in line:
+                agent = "claude"
+        return agent
+
+    def _agent_for(self, ref: macfocus.WindowRef) -> str | None:
+        key = _window_key(ref)
+        agent = self.window_agent.get(key)
+        if agent is None:
+            agent = self._detect_agent(ref)
+            if agent:
+                self.window_agent[key] = agent
+                log.info("detected %s in %s", agent, key)
+        return agent
+
     def _active_voice_mode(self) -> str:
         """Voice mode for the terminal the user is dictating into.
 
         Claude Code has native push-to-talk we can hold; Codex (and anything
         else) gets local record+transcribe+paste. The frontmost bound
-        window's linked agent decides; --voice is the default/override.
+        window's agent decides; --voice is the default/override.
         """
         if self.voice_mode == "off":
             return "off"
-        if not self.window_agent:
+        if not self.windows:
             return self.voice_mode
         ref = macfocus.frontmost_window()
-        if ref is not None:
-            agent = self.window_agent.get(_window_key(ref))
+        if ref is not None and _window_key(ref) in self.windows:
+            agent = self._agent_for(ref)
             if agent == "codex":
                 return "record"
             if agent == "claude":
@@ -226,7 +260,9 @@ class AgentPhoneDaemon:
         self.windows[key] = ref
         self.router.bind(key, ref.label)
         self._save_bindings()
-        log.info("bound %s (%s)", key, ref.label)
+        agent = self._agent_for(ref)
+        log.info("bound %s (%s)%s", key, ref.label,
+                 f" [{agent}]" if agent else "")
         self._refresh(f"bound {ref.label}")
 
     def focus_next(self) -> None:

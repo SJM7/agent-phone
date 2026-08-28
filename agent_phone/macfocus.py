@@ -82,6 +82,17 @@ TERMINAL_EXISTS_SCRIPT = (
     'tell application "Terminal" to (exists window id {window_id}) as text'
 )
 
+TERMINAL_TTY_SCRIPT = """\
+tell application "Terminal"
+	if not (exists window id {window_id}) then return "MISSING"
+	set w to window id {window_id}
+	if {tab_index} > 0 and {tab_index} <= (count tabs of w) then
+		return tty of tab {tab_index} of w
+	end if
+	return tty of selected tab of w
+end tell
+"""
+
 TERMINAL_MINIMIZE_SCRIPT = """\
 tell application "Terminal"
 	if not (exists window id {window_id}) then return "MISSING"
@@ -131,6 +142,13 @@ end tell
 ITERM_EXISTS_SCRIPT = (
     'tell application "iTerm2" to (exists window id {window_id}) as text'
 )
+
+ITERM_TTY_SCRIPT = """\
+tell application "iTerm2"
+	if not (exists window id {window_id}) then return "MISSING"
+	return tty of current session of window id {window_id}
+end tell
+"""
 
 # iTerm2 windows expose the standard `miniaturized` property in the same
 # dictionary as Terminal.app; untested live (iTerm2 not installed here).
@@ -336,6 +354,21 @@ def focus(ref: WindowRef) -> bool:
         log.info("window %s:%d no longer exists", ref.app, ref.window_id)
         return False
     return output == "OK"
+
+
+def tty(ref: WindowRef) -> str | None:
+    """The window's terminal device (e.g. '/dev/ttys004'), or None."""
+    if ref.app == APP_TERMINAL:
+        script = TERMINAL_TTY_SCRIPT.format(window_id=int(ref.window_id),
+                                            tab_index=int(ref.tab_index or 0))
+    elif ref.app == APP_ITERM:
+        script = ITERM_TTY_SCRIPT.format(window_id=int(ref.window_id))
+    else:
+        return None
+    output = _run_osascript(script)
+    if output is None or output == "MISSING" or not output.startswith("/dev/"):
+        return None
+    return output.strip()
 
 
 def minimize(ref: WindowRef) -> bool:

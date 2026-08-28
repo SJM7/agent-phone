@@ -42,6 +42,7 @@ def make_daemon(monkeypatch, tmp_path, n_windows=3):
     focused = []
     monkeypatch.setattr(macfocus, "exists", lambda ref: True)
     monkeypatch.setattr(macfocus, "focus", lambda ref: focused.append(ref) or True)
+    monkeypatch.setattr(macfocus, "tty", lambda ref: None)
 
     current = {"ref": None}
     monkeypatch.setattr(macfocus, "frontmost_window", lambda: current["ref"])
@@ -261,6 +262,29 @@ def test_codex_window_gets_record_mode(monkeypatch, tmp_path):
     daemon.handle_offhook()
     assert daemon.backend.capturing is True
     assert procs == []                       # no push-to-talk hold
+    daemon.handle_onhook()
+    assert daemon.backend.capturing is False
+
+
+def test_agent_detected_from_tty_before_any_hook(monkeypatch, tmp_path):
+    """A freshly bound Codex terminal must get record mode immediately,
+    even though no hook has fired yet (the first-prompt chicken-and-egg)."""
+    daemon, refs, focused, bind, finish = make_daemon(monkeypatch, tmp_path,
+                                                      n_windows=1)
+    monkeypatch.setattr(macfocus, "tty", lambda ref: "/dev/ttys009")
+
+    def fake_run(cmd, **kwargs):
+        class R:
+            stdout = ("login -pf user\n-zsh\n"
+                      "node /opt/homebrew/bin/codex cli\n")
+        assert cmd[:2] == ["ps", "-t"] and cmd[2] == "ttys009"
+        return R()
+
+    monkeypatch.setattr(daemon_mod.subprocess, "run", fake_run)
+    bind(0)                       # detection happens at bind time
+    assert daemon.window_agent["Terminal:100"] == "codex"
+    daemon.handle_offhook()       # frontmost is the codex window
+    assert daemon.backend.capturing is True
     daemon.handle_onhook()
     assert daemon.backend.capturing is False
 
