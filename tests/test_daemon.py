@@ -317,6 +317,64 @@ def test_agent_detected_from_tty_before_any_hook(monkeypatch, tmp_path):
     assert daemon.backend.capturing is False
 
 
+class FakeTimer:
+    def __init__(self, fn, args):
+        self.fn, self.args = fn, args
+        self.cancelled = False
+
+    def cancel(self):
+        self.cancelled = True
+
+    def fire(self):
+        self.fn(*self.args)
+
+
+class FakeLoop:
+    def __init__(self):
+        self.timers = []
+
+    def call_later(self, delay, fn, *args):
+        timer = FakeTimer(fn, args)
+        self.timers.append(timer)
+        return timer
+
+
+def test_hermes_turn_end_is_debounced(monkeypatch, tmp_path):
+    daemon, refs, focused, bind, finish = make_daemon(monkeypatch, tmp_path,
+                                                      n_windows=1)
+    bind(0)
+    daemon._turn_start({"session_id": "h1", "_agent": "hermes"})
+    assert daemon.window_agent["Terminal:100"] == "hermes"
+    daemon.loop = FakeLoop()
+
+    # a post_llm_call schedules a settle timer instead of firing attention
+    daemon._turn_done({"session_id": "h1", "_agent": "hermes"})
+    assert daemon.backend.led is False
+    assert len(daemon.loop.timers) == 1
+
+    # further activity (next llm/tool call) cancels the pending turn-done
+    daemon._turn_start({"session_id": "h1", "_agent": "hermes"})
+    assert daemon.loop.timers[0].cancelled is True
+
+    # the turn's real end: post_llm_call then silence -> timer fires
+    daemon._turn_done({"session_id": "h1", "_agent": "hermes"})
+    daemon.loop.timers[-1].fire()
+    assert daemon.backend.led is True
+    assert daemon.router.needs_attention() == ["Terminal:100"]
+
+
+def test_hermes_window_gets_record_mode(monkeypatch, tmp_path):
+    runs, procs = _capture_osascript(monkeypatch)
+    daemon, refs, focused, bind, finish = make_daemon(monkeypatch, tmp_path,
+                                                      n_windows=1)
+    bind(0)
+    daemon._turn_start({"session_id": "h1", "_agent": "hermes"})
+    daemon.handle_offhook()
+    assert daemon.backend.capturing is True     # record mode, not push-to-talk
+    assert procs == []
+    daemon.handle_onhook()
+
+
 def test_voice_off_ignores_receiver(monkeypatch, tmp_path):
     runs, procs = _capture_osascript(monkeypatch)
     d = AgentPhoneDaemon(http_port=0, bindings_path=tmp_path / "b.json", voice_mode="off")

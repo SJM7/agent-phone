@@ -34,6 +34,7 @@ log = logging.getLogger("agent_phone")
 
 RECORDINGS_DIR = pathlib.Path.home() / ".agent-phone" / "recordings"
 BINDINGS_PATH = pathlib.Path.home() / ".agent-phone" / "bindings.json"
+HERMES_TURN_SETTLE = 4.0    # quiet seconds after a Hermes LLM call = turn done
 
 
 def _window_key(ref: macfocus.WindowRef) -> str:
@@ -59,7 +60,8 @@ class AgentPhoneDaemon:
         self.router = AttentionRouter()
         self.windows: dict[str, macfocus.WindowRef] = {}
         self.sessions: dict[str, str] = {}      # agent session_id -> window key
-        self.window_agent: dict[str, str] = {}  # window key -> claude | codex
+        self.window_agent: dict[str, str] = {}  # window key -> claude|codex|hermes
+        self._pending_done: dict[str, asyncio.TimerHandle] = {}
         self._led_on = False
         self._bindings_path = bindings_path
         self._load_bindings()
@@ -157,7 +159,9 @@ class AgentPhoneDaemon:
             return None
         agent = None
         for line in out.stdout.lower().splitlines():
-            if "codex" in line:
+            if "hermes" in line:
+                agent = "hermes"
+            elif "codex" in line:
                 agent = "codex"
             elif "claude" in line:
                 agent = "claude"
@@ -187,8 +191,8 @@ class AgentPhoneDaemon:
         ref = macfocus.frontmost_window()
         if ref is not None and _window_key(ref) in self.windows:
             agent = self._agent_for(ref)
-            if agent == "codex":
-                return "record"
+            if agent in ("codex", "hermes"):
+                return "record"       # no native dictation in these TUIs
             if agent == "claude":
                 return "claude"
         return self.voice_mode
@@ -362,6 +366,11 @@ class AgentPhoneDaemon:
         sid = payload.get("session_id")
         if not sid:
             return
+        # Hermes reports activity (pre_llm_call / pre_tool_call) rather than
+        # a single turn-start; any activity cancels a pending turn-done.
+        pending = self._pending_done.pop(sid, None)
+        if pending is not None:
+            pending.cancel()
         ref = macfocus.frontmost_window()
         if ref is not None and _window_key(ref) in self.windows:
             if self.sessions.get(sid) != _window_key(ref):
@@ -375,6 +384,21 @@ class AgentPhoneDaemon:
 
     def _turn_done(self, payload: dict) -> None:
         sid = payload.get("session_id")
+        if sid and payload.get("_agent") == "hermes":
+            # Hermes has no turn-end event; a post_llm_call with nothing
+            # following it IS the end of the turn. Debounce: fire only if
+            # no further activity arrives within the settle window.
+            pending = self._pending_done.pop(sid, None)
+            if pending is not None:
+                pending.cancel()
+            if self.loop is not None:
+                self._pending_done[sid] = self.loop.call_later(
+                    HERMES_TURN_SETTLE, self._turn_done_now, sid)
+                return
+        self._turn_done_now(sid)
+
+    def _turn_done_now(self, sid: str | None) -> None:
+        self._pending_done.pop(sid, None)
         key = self.sessions.get(sid or "")
         if key is None:
             log.info("turn done for unbound session %s", sid)

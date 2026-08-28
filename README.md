@@ -43,18 +43,18 @@ talk, hang up, Redial.
 
 ## Supported harnesses
 
-Agent Phone works with both major coding agents, side by side in the same
+Agent Phone works with the major agent harnesses, side by side in the same
 session — the daemon detects which one lives in each terminal and adapts:
 
-| | Claude Code | Codex CLI |
-|---|---|---|
-| Lamp on turn finished | `Stop` hook | `Stop` hook |
-| Session linking | `UserPromptSubmit` hook | `UserPromptSubmit` hook |
-| Receiver dictation | native dictation (push-to-talk held for you) | handset recorded, transcribed locally by whisper.cpp, pasted for review |
-| Setup | [docs/claude-code-setup.md](docs/claude-code-setup.md) | [docs/codex-setup.md](docs/codex-setup.md) |
+| | Claude Code | Codex CLI | Hermes |
+|---|---|---|---|
+| Lamp on turn finished | `Stop` hook | `Stop` hook | `post_llm_call` + settle debounce |
+| Session linking | `UserPromptSubmit` hook | `UserPromptSubmit` hook | `pre_llm_call` / `pre_tool_call` |
+| Receiver dictation | native dictation (push-to-talk held for you) | local whisper.cpp, pasted for review | local whisper.cpp, pasted for review |
+| Setup | [docs/claude-code-setup.md](docs/claude-code-setup.md) | [docs/codex-setup.md](docs/codex-setup.md) | [docs/hermes-setup.md](docs/hermes-setup.md) |
 
-Both harnesses expose the same two hook events with JSON on stdin, so one
-tiny hook script serves them both. Which harness runs in a terminal is
+All three pass hook payloads as JSON on stdin with the same core fields, so
+one tiny hook script serves them all. Which harness runs in a terminal is
 detected from its tty's process list at bind time, so dictating your very
 first prompt into a fresh terminal picks the right mode.
 
