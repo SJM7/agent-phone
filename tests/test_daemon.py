@@ -207,6 +207,34 @@ def test_dashboard_rendering(monkeypatch, tmp_path):
     assert backend.dashboards[-1] == ("view: term-2", "all quiet", "*0", "#3")
 
 
+def test_digit_speed_dial(monkeypatch, tmp_path):
+    daemon, refs, focused, bind, finish = make_daemon(monkeypatch, tmp_path)
+    for i in range(3):
+        bind(i)
+    finish(1)                                  # term-1 needs attention
+    daemon.handle_key("2")
+    assert focused[-1] == refs[1]
+    assert daemon.backend.led is False          # jump also marks it read
+    assert daemon.backend.dashboards[-1][0] == "2: term-1"
+    daemon.handle_key("9")                      # out of range
+    assert daemon.backend.dashboards[-1][0] == "no terminal 9"
+    assert focused[-1] == refs[1]               # nothing new focused
+
+
+def test_function_buttons_send_keystrokes(monkeypatch, tmp_path):
+    runs, procs = _capture_osascript(monkeypatch)
+    daemon, refs, focused, bind, finish = make_daemon(monkeypatch, tmp_path)
+    daemon.handle_button("redial")
+    assert "key code 36" in runs[-1][2]
+    assert daemon.backend.dashboards[-1][0] == "sent"
+    daemon.handle_button("hold")
+    assert "key code 53" in runs[-1][2]
+    assert daemon.backend.dashboards[-1][0] == "interrupt"
+    daemon.handle_button("delete")
+    assert 'keystroke "u" using control down' in runs[-1][2]
+    assert daemon.backend.dashboards[-1][0] == "cleared"
+
+
 def test_zero_minimizes_all_bound(monkeypatch, tmp_path):
     daemon, refs, focused, bind, finish = make_daemon(monkeypatch, tmp_path)
     minimized = []

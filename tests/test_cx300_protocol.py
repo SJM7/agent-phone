@@ -100,6 +100,20 @@ def test_event_detector_key_and_hook_same_report_order():
     assert events == [("key", "*"), ("offhook", None)]
 
 
+def test_event_detector_button_edges():
+    det = EventDetector()
+    assert det.feed(parse_input_report(report(flags=0x04))) == [("redial", None)]
+    assert det.feed(parse_input_report(report(flags=0x04))) == []      # held
+    assert det.feed(parse_input_report(report(flags=0x00))) == []      # release
+    assert det.feed(parse_input_report(report(flags=0x02))) == [("hold", None)]
+    assert det.feed(parse_input_report(report(flags=0x00))) == []
+    assert det.feed(parse_input_report(report(flags=0x20))) == [("delete", None)]
+    # combined: key + redial + offhook in one report, in that order
+    det2 = EventDetector()
+    events = det2.feed(parse_input_report(report(key=0x0B, flags=0x05)))
+    assert events == [("key", "*"), ("redial", None), ("offhook", None)]
+
+
 def test_event_detector_instances_independent():
     a, b = EventDetector(), EventDetector()
     a.feed(parse_input_report(report(key=0x0C)))

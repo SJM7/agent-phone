@@ -34,11 +34,13 @@ class Cx300Phone:
                  on_key: Callable[[str], None],
                  on_offhook: Callable[[], None],
                  on_onhook: Callable[[], None],
-                 on_connect: Callable[[], None] | None = None) -> None:
+                 on_connect: Callable[[], None] | None = None,
+                 on_button: Callable[[str], None] | None = None) -> None:
         self.on_key = on_key
         self.on_offhook = on_offhook
         self.on_onhook = on_onhook
         self.on_connect = on_connect
+        self.on_button = on_button      # redial | hold | delete
         self._dev = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -184,6 +186,8 @@ class Cx300Phone:
                     self._safely(self.on_offhook)
                 elif event == "onhook":
                     self._safely(self.on_onhook)
+                elif self.on_button is not None:
+                    self._safely(self.on_button, event)
 
     @staticmethod
     def _safely(fn, *args) -> None:

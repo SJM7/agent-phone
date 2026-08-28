@@ -59,10 +59,14 @@ def parse_input_report(data: bytes) -> InputState | None:
     )
 
 
+_BUTTON_FLAGS = ("redial", "hold", "delete")
+
+
 class EventDetector:
     def __init__(self) -> None:
         self._prev_key: Optional[str] = None
         self._prev_offhook: bool = False
+        self._prev_buttons = {name: False for name in _BUTTON_FLAGS}
 
     def feed(self, state: InputState) -> List[Tuple[str, Optional[str]]]:
         events = []
@@ -72,9 +76,12 @@ class EventDetector:
         if current_key is not None:
             if current_key != prev_key:
                 events.append(("key", current_key))
-        else:
-            if prev_key is not None:
-                pass
+
+        for name in _BUTTON_FLAGS:
+            pressed = getattr(state, name)
+            if pressed and not self._prev_buttons[name]:
+                events.append((name, None))
+            self._prev_buttons[name] = pressed
 
         if state.offhook and not self._prev_offhook:
             events.append(("offhook", None))

@@ -23,6 +23,24 @@ phone's light blink.
 No PBX, no cloud telephony, no browser extension. One daemon on your Mac and
 a $20-on-eBay desk phone.
 
+## The keypad
+
+| Control | Action |
+|---|---|
+| `#` | bind the focused terminal |
+| `*` | next terminal needing attention; browses all bound terminals when quiet |
+| `1`–`9` | speed dial: jump straight to the Nth bound terminal |
+| `0` | minimize every bound terminal |
+| Redial | press Enter in the focused terminal (send the dictated prompt) |
+| Hold | press Escape (interrupt a running agent) |
+| Delete | clear the input line (Ctrl+U) |
+| Receiver | dictate; hang up to finish |
+| Mute | hardware-mutes the handset mic mid-dictation |
+| Lamp | blinking red: a terminal needs you; steady green: all clear |
+
+The full loop never touches the keyboard: lamp blinks, `*`, read, lift,
+talk, hang up, Redial.
+
 ## Supported harnesses
 
 Agent Phone works with both major coding agents, side by side in the same

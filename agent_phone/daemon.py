@@ -90,6 +90,54 @@ class AgentPhoneDaemon:
             self.focus_next()
         elif digit == "0":
             self.minimize_all()
+        elif digit.isdigit():
+            self.jump_to(int(digit))
+
+    def handle_button(self, name: str) -> None:
+        """The three function keys: Redial sends, Hold interrupts,
+        Delete clears the input line — all aimed at the frontmost app."""
+        if name == "redial":
+            log.info("redial: sending Enter")
+            self._send_keystroke("key code 36")            # Return
+            self._refresh("sent")
+        elif name == "hold":
+            log.info("hold: sending Escape (interrupt)")
+            self._send_keystroke("key code 53")            # Escape
+            self._refresh("interrupt")
+        elif name == "delete":
+            log.info("delete: clearing input line")
+            self._send_keystroke('keystroke "u" using control down')
+            self._refresh("cleared")
+
+    def _send_keystroke(self, action: str) -> None:
+        script = f'tell application "System Events" to {action}'
+
+        def run() -> None:
+            try:
+                subprocess.run(["osascript", "-e", script], capture_output=True,
+                               timeout=5, check=True)
+            except (subprocess.SubprocessError, OSError) as exc:
+                log.error("keystroke failed: %s", exc)
+        if self.loop is not None:
+            self.loop.run_in_executor(None, run)
+        else:
+            run()
+
+    def jump_to(self, n: int) -> None:
+        """Speed dial: digit N focuses the Nth bound terminal (bind order)."""
+        self._prune_dead_windows()
+        keys = [k for k, _ in self.router.bindings()]
+        if not 1 <= n <= len(keys):
+            log.info("%d pressed but only %d terminal(s) bound", n, len(keys))
+            self._refresh(f"no terminal {n}")
+            return
+        key = keys[n - 1]
+        ref = self.windows.get(key)
+        if ref is not None and macfocus.focus(ref):
+            log.info("jumped to %d: %s", n, key)
+            self.router.clear_attention(key)
+            self._refresh(f"{n}: {ref.label}")
+        self._sync_led()
 
     def _detect_agent(self, ref: macfocus.WindowRef) -> str | None:
         """Which harness runs in this window, from its tty's process list.
@@ -403,6 +451,7 @@ class UsbBackend:
             on_offhook=lambda: daemon._call_soon(daemon.handle_offhook),
             on_onhook=lambda: daemon._call_soon(daemon.handle_onhook),
             on_connect=lambda: daemon._call_soon(self._on_connect),
+            on_button=lambda n: daemon._call_soon(daemon.handle_button, n),
         )
         self.phone.start()
 
