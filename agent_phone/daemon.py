@@ -52,12 +52,14 @@ class AgentPhoneDaemon:
         self.voice_mode = voice_mode          # claude | record | off
         self.dictation_key = dictation_key
         self._ptt_proc: subprocess.Popen | None = None
+        self._offhook_mode = voice_mode
         self.loop: asyncio.AbstractEventLoop | None = None
         self.backend = None            # set by main()
 
         self.router = AttentionRouter()
         self.windows: dict[str, macfocus.WindowRef] = {}
-        self.sessions: dict[str, str] = {}      # claude session_id -> window key
+        self.sessions: dict[str, str] = {}      # agent session_id -> window key
+        self.window_agent: dict[str, str] = {}  # window key -> claude | codex
         self._led_on = False
         self._bindings_path = bindings_path
         self._load_bindings()
@@ -89,24 +91,46 @@ class AgentPhoneDaemon:
         elif digit == "0":
             self.minimize_all()
 
+    def _active_voice_mode(self) -> str:
+        """Voice mode for the terminal the user is dictating into.
+
+        Claude Code has native push-to-talk we can hold; Codex (and anything
+        else) gets local record+transcribe+paste. The frontmost bound
+        window's linked agent decides; --voice is the default/override.
+        """
+        if self.voice_mode == "off":
+            return "off"
+        if not self.window_agent:
+            return self.voice_mode
+        ref = macfocus.frontmost_window()
+        if ref is not None:
+            agent = self.window_agent.get(_window_key(ref))
+            if agent == "codex":
+                return "record"
+            if agent == "claude":
+                return "claude"
+        return self.voice_mode
+
     def handle_offhook(self) -> None:
-        if self.voice_mode == "claude":
+        self._offhook_mode = self._active_voice_mode()
+        if self._offhook_mode == "claude":
             # Hold Claude Code's push-to-talk key for as long as the receiver
             # is up. Terminals detect a held key by its repeat stream, and
             # synthetic key events don't auto-repeat, so post key-downs on a
             # repeat-like cadence until hang-up.
             log.info("receiver up: holding push-to-talk")
             self._start_ptt_hold()
-        elif self.voice_mode == "record":
+        elif self._offhook_mode == "record":
             log.info("receiver up: recording")
             self.backend.start_capture()
 
     def handle_onhook(self) -> None:
-        if self.voice_mode == "claude":
+        mode = getattr(self, "_offhook_mode", self.voice_mode)
+        if mode == "claude":
             log.info("receiver down: releasing push-to-talk")
             self._stop_ptt_hold()
             return
-        if self.voice_mode != "record":
+        if mode != "record":
             return
         wav = self.backend.stop_capture()
         if wav is None:
@@ -252,6 +276,7 @@ class AgentPhoneDaemon:
             if self.sessions.get(sid) != _window_key(ref):
                 log.info("linked session %s -> %s", sid, _window_key(ref))
             self.sessions[sid] = _window_key(ref)
+            self.window_agent[_window_key(ref)] = "claude"
         key = self.sessions.get(sid)
         if key:
             self.router.clear_attention(key)
