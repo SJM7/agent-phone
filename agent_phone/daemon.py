@@ -186,10 +186,10 @@ class AgentPhoneDaemon:
         """
         if self.voice_mode == "off":
             return "off"
-        if not self.windows:
-            return self.voice_mode
+        # Identify whatever terminal is frontmost, bound or not — binding is
+        # for the lamp and cycling, never a prerequisite for dictating.
         ref = macfocus.frontmost_window()
-        if ref is not None and _window_key(ref) in self.windows:
+        if ref is not None:
             agent = self._agent_for(ref)
             if agent in ("codex", "hermes"):
                 return "record"       # no native dictation in these TUIs

@@ -146,6 +146,8 @@ def _capture_osascript(monkeypatch):
 
     monkeypatch.setattr(daemon_mod.subprocess, "run", fake_run)
     monkeypatch.setattr(daemon_mod.subprocess, "Popen", fake_popen)
+    # direct-constructor tests have no window fixtures; never hit osascript
+    monkeypatch.setattr(macfocus, "frontmost_window", lambda: None)
     return runs, procs
 
 
@@ -372,6 +374,27 @@ def test_hermes_window_gets_record_mode(monkeypatch, tmp_path):
     daemon.handle_offhook()
     assert daemon.backend.capturing is True     # record mode, not push-to-talk
     assert procs == []
+    daemon.handle_onhook()
+
+
+def test_unbound_hermes_terminal_still_gets_record_mode(monkeypatch, tmp_path):
+    """Live failure 2026-08-27: receiver lifted in a NEVER-BOUND Hermes
+    terminal spammed push-to-talk spaces. Detection must not require #."""
+    daemon, refs, focused, bind, finish = make_daemon(monkeypatch, tmp_path,
+                                                      n_windows=1)
+    # frontmost is refs[0] but it is NOT bound (no bind() call)
+    monkeypatch.setattr(macfocus, "frontmost_window", lambda: refs[0])
+    monkeypatch.setattr(macfocus, "tty", lambda ref: "/dev/ttys011")
+
+    def fake_run(cmd, **kwargs):
+        class R:
+            stdout = ("-zsh\n/Users/x/.hermes/hermes-agent/venv/bin/python "
+                      "-m hermes_cli.main chat\n")
+        return R()
+
+    monkeypatch.setattr(daemon_mod.subprocess, "run", fake_run)
+    daemon.handle_offhook()
+    assert daemon.backend.capturing is True     # record mode, no space spam
     daemon.handle_onhook()
 
 
