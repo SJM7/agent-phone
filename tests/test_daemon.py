@@ -326,8 +326,8 @@ def test_agent_detected_from_tty_before_any_hook(monkeypatch, tmp_path):
 
     def fake_run(cmd, **kwargs):
         class R:
-            stdout = ("login -pf user\n-zsh\n"
-                      "node /opt/homebrew/bin/codex cli\n")
+            stdout = ("Ss   login -pf user\nS    -zsh\n"
+                      "S+   node /opt/homebrew/bin/codex cli\n")
         assert cmd[:2] == ["ps", "-t"] and cmd[2] == "ttys009"
         return R()
 
@@ -398,6 +398,26 @@ def test_hermes_window_gets_record_mode(monkeypatch, tmp_path):
     daemon.handle_onhook()
 
 
+def test_foreground_process_beats_background_straggler(monkeypatch, tmp_path):
+    """Live failure 2026-08-27: a transient `codex exec` on the Claude
+    terminal's tty out-voted the foreground claude TUI, so the receiver
+    fell back to whisper instead of native push-to-talk."""
+    daemon, refs, focused, bind, finish = make_daemon(monkeypatch, tmp_path,
+                                                      n_windows=1)
+    monkeypatch.setattr(macfocus, "frontmost_window", lambda: refs[0])
+    monkeypatch.setattr(macfocus, "tty", lambda ref: "/dev/ttys004")
+
+    def fake_run(cmd, **kwargs):
+        class R:      # claude is the foreground (+); codex is background
+            stdout = ("Ss   login -pf user\n"
+                      "S+   node /usr/local/bin/claude\n"
+                      "S    node /opt/homebrew/bin/codex exec say ok\n")
+        return R()
+
+    monkeypatch.setattr(daemon_mod.subprocess, "run", fake_run)
+    assert daemon._detect_agent(refs[0]) == "claude"
+
+
 def test_unbound_hermes_terminal_still_gets_record_mode(monkeypatch, tmp_path):
     """Live failure 2026-08-27: receiver lifted in a NEVER-BOUND Hermes
     terminal spammed push-to-talk spaces. Detection must not require #."""
@@ -409,8 +429,8 @@ def test_unbound_hermes_terminal_still_gets_record_mode(monkeypatch, tmp_path):
 
     def fake_run(cmd, **kwargs):
         class R:
-            stdout = ("-zsh\n/Users/x/.hermes/hermes-agent/venv/bin/python "
-                      "-m hermes_cli.main chat\n")
+            stdout = ("S    -zsh\nS+   /Users/x/.hermes/hermes-agent/venv/"
+                      "bin/python -m hermes_cli.main chat\n")
         return R()
 
     monkeypatch.setattr(daemon_mod.subprocess, "run", fake_run)

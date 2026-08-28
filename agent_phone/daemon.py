@@ -154,19 +154,36 @@ class AgentPhoneDaemon:
             return None
         try:
             out = subprocess.run(
-                ["ps", "-t", term.removeprefix("/dev/"), "-o", "command="],
+                ["ps", "-t", term.removeprefix("/dev/"), "-o",
+                 "stat=,command="],
                 capture_output=True, text=True, timeout=5)
         except (subprocess.SubprocessError, OSError):
             return None
-        agent = None
-        for line in out.stdout.lower().splitlines():
+
+        def match(line: str) -> str | None:
             if "hermes" in line:
-                agent = "hermes"
-            elif "codex" in line:
-                agent = "codex"
-            elif "claude" in line:
-                agent = "claude"
-        return agent
+                return "hermes"
+            if "codex" in line:
+                return "codex"
+            if "claude" in line:
+                return "claude"
+            return None
+
+        # Prefer the FOREGROUND process (stat contains '+') — that is the TUI
+        # the user is actually looking at. Background stragglers on the same
+        # tty (a stray `codex exec`, a helper) must not win over it.
+        agent_fg = agent_any = None
+        for line in out.stdout.lower().splitlines():
+            parts = line.split(None, 1)
+            if len(parts) != 2:
+                continue
+            stat, command = parts
+            found = match(command)
+            if found:
+                agent_any = found
+                if "+" in stat:
+                    agent_fg = found
+        return agent_fg or agent_any
 
     def _agent_for(self, ref: macfocus.WindowRef) -> str | None:
         key = _window_key(ref)
