@@ -138,6 +138,13 @@ Communicator" / sign-in screen. Audio needs no initialization at all.
 Ringing is host-driven: there is no autonomous ringer command — set an LED
 state and play ring audio out of the speaker yourself.
 
+## The full report descriptor
+
+The complete 529-byte HID report descriptor — extracted from a live phone
+and annotated item by item, including five feature reports and several
+output fields no community source documents — is in
+[cx300-hid-descriptor.md](cx300-hid-descriptor.md).
+
 ## Unknowns
 
 - The CX300 **R2** revision has no public descriptor dump; firmware
