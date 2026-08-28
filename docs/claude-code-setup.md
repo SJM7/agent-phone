@@ -86,10 +86,10 @@ If Space bothers you (it types spaces when a prompt already has text),
 rebind `voice:pushToTalk` in `~/.claude/keybindings.json` and pass the same
 key to the daemon with `--dictation-key`.
 
-Codex CLI note: Codex currently has no native voice input (experimental
-voice shipped in v0.105 and was removed in v0.118), so for Codex-only
-terminals run the daemon with `--voice record --stt-command '...'` to use
-local transcription and clipboard paste instead.
+Codex CLI note: Codex has no native voice input (experimental voice shipped
+in v0.105 and was removed in v0.118), so Codex terminals automatically get
+local whisper transcription and clipboard paste instead — no flags needed.
+See [codex-setup.md](codex-setup.md) for the Codex hook configuration.
 
 ## 4. Testing manually
 

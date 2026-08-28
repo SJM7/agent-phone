@@ -23,13 +23,29 @@ phone's light blink.
 No PBX, no cloud telephony, no browser extension. One daemon on your Mac and
 a $20-on-eBay desk phone.
 
+## Supported harnesses
+
+Agent Phone works with both major coding agents, side by side in the same
+session — the daemon detects which one lives in each terminal and adapts:
+
+| | Claude Code | Codex CLI |
+|---|---|---|
+| Lamp on turn finished | `Stop` hook | `Stop` hook |
+| Session linking | `UserPromptSubmit` hook | `UserPromptSubmit` hook |
+| Receiver dictation | native dictation (push-to-talk held for you) | handset recorded, transcribed locally by whisper.cpp, pasted for review |
+| Setup | [docs/claude-code-setup.md](docs/claude-code-setup.md) | [docs/codex-setup.md](docs/codex-setup.md) |
+
+Both harnesses expose the same two hook events with JSON on stdin, so one
+tiny hook script serves them both. Which harness runs in a terminal is
+detected from its tty's process list at bind time, so dictating your very
+first prompt into a fresh terminal picks the right mode.
+
 ## How it works
 
 The daemon (`python -m agent_phone.daemon`) is plain Python. Terminal windows
 are tracked and focused through macOS Automation (Terminal.app and iTerm2),
-and each Claude Code session announces itself over two tiny
-[hooks](docs/claude-code-setup.md): *turn started* (`UserPromptSubmit`) and
-*turn finished* (`Stop`).
+and each agent session announces itself over the two hooks above: *turn
+started* and *turn finished*.
 
 The phone side is pluggable, because "old desk phone" comes in two species:
 
@@ -109,6 +125,9 @@ device lifecycle (reader thread, keepalive, reconnect) in `agent_phone/cx300.py`
 ## Speech to text
 
 Two modes:
+
+The mode below is chosen automatically per terminal; `--voice` sets the
+fallback for windows the daemon can't identify.
 
 - **`--voice claude`** (default) — uses Claude Code's own built-in dictation:
   lifting the receiver holds its push-to-talk key, hanging up releases it,
