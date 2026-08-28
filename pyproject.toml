@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Repurpose a Polycom VVX 300 desk phone as a control surface for parallel Claude Code / Codex terminal sessions: bind terminals with #, get LED-blink attention alerts, cycle terminals with *, and dictate prompts through the handset."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { file = "LICENSE" }
+license = { file = "LICENSE.md" }
 dependencies = ["hidapi>=0.14"]
 
 [dependency-groups]

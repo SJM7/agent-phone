@@ -1,5 +1,10 @@
 # The Polycom CX300 HID protocol
 
+*This document is released under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
+— copy it, republish it, build on it, commercially or not, with attribution.
+It preserves community reverse-engineering and should stay as free as the
+work it builds on, regardless of the license on this repository's code.*
+
 A standalone reference for driving the Polycom CX300 USB desk phone without
 Microsoft Lync, and a record of the people who made that possible. The
 protocol is not documented by Polycom anywhere public; everything below

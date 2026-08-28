@@ -136,4 +136,12 @@ Python 3.11+, stdlib-only runtime so far. 108 tests.
 
 ## License
 
-MIT
+[PolyForm Noncommercial 1.0.0](LICENSE.md): use it, study it, fork it, run
+it on your own desk — anything noncommercial. Commercial use of this code
+requires a separate license from the author.
+
+The protocol documentation in
+[docs/cx300-hid-protocol.md](docs/cx300-hid-protocol.md) is additionally
+released under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) —
+it preserves community reverse-engineering and should stay as free as the
+work it builds on.
