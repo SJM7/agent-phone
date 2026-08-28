@@ -119,9 +119,14 @@ class FakeProc:
     def __init__(self, cmd):
         self.cmd = cmd
         self.terminated = False
+        self.waited = False
 
     def terminate(self):
         self.terminated = True
+
+    def wait(self, timeout=None):
+        self.waited = True
+        return 0
 
 
 def _capture_osascript(monkeypatch):
@@ -157,6 +162,7 @@ def test_voice_claude_holds_and_releases_push_to_talk(monkeypatch, tmp_path):
     assert len(procs) == 1
     d.handle_onhook()
     assert procs[0].terminated is True
+    assert procs[0].waited is True      # loop confirmed dead before key up
     assert len(runs) == 1 and 'key up " "' in runs[0][2]
     assert d.backend.capturing is False       # no ffmpeg recording in this mode
     d.handle_onhook()                         # second hang-up: no double release
@@ -236,6 +242,27 @@ def test_bindings_persist_across_restart(monkeypatch, tmp_path):
     d2._turn_start({"session_id": "s1"})
     d2._turn_done({"session_id": "s1"})
     assert d2.backend.led is True
+
+
+def test_codex_window_gets_record_mode(monkeypatch, tmp_path):
+    runs, procs = _capture_osascript(monkeypatch)
+    daemon, refs, focused, bind, finish = make_daemon(monkeypatch, tmp_path,
+                                                      n_windows=2)
+    bind(0)
+    bind(1)
+    # window 0 hosts Claude Code, window 1 hosts Codex
+    daemon._turn_start({"session_id": "c1", "_agent": "claude"})  # frontmost=1
+    # make window 0 frontmost for the claude link
+    daemon.windows  # (frontmost currently refs[1] from bind(1))
+    daemon._turn_start({"session_id": "x1", "_agent": "codex"})
+    assert daemon.window_agent["Terminal:101"] == "codex"
+
+    # receiver up with the codex window frontmost -> record mode
+    daemon.handle_offhook()
+    assert daemon.backend.capturing is True
+    assert procs == []                       # no push-to-talk hold
+    daemon.handle_onhook()
+    assert daemon.backend.capturing is False
 
 
 def test_voice_off_ignores_receiver(monkeypatch, tmp_path):

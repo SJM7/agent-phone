@@ -71,10 +71,11 @@ class Cx300Phone:
 
     # -- outputs ------------------------------------------------------------
     def set_led(self, attention: bool) -> None:
+        """Attention blinks red; all-clear shows steady green."""
         self._blinking = attention
         self._blink_lit = attention
         self._next_blink = time.monotonic() + BLINK_INTERVAL
-        self._write(build_led("red" if attention else "off"))
+        self._write(build_led("red" if attention else "green"))
 
     def _blink_tick(self, now: float) -> None:
         if not self._blinking or now < self._next_blink:

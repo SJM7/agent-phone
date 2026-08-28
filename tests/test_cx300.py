@@ -12,6 +12,7 @@ def make_phone():
 
 RED = bytes([0x16, 0x03])
 OFF = bytes([0x16, 0x07])
+GREEN = bytes([0x16, 0x01])
 
 
 def test_blink_toggles_red_off():
@@ -27,12 +28,12 @@ def test_blink_toggles_red_off():
     assert writes[-1] == RED                    # back on
 
 
-def test_blink_stops_cleanly():
+def test_blink_stops_to_steady_green():
     phone, writes = make_phone()
     phone.set_led(True)
     phone._blink_tick(phone._next_blink + 0.01)
     phone.set_led(False)
-    assert writes[-1] == OFF
+    assert writes[-1] == GREEN                  # all-clear is steady green
     n = len(writes)
     phone._blink_tick(phone._next_blink + 10)   # disabled: never toggles
     assert len(writes) == n

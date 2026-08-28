@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import urllib.parse
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -100,22 +101,27 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = self._read_body()
-        if self.path == "/hook/stop":
-            self._handle_hook(body, "on_turn_done")
-        elif self.path == "/hook/user-prompt-submit":
-            self._handle_hook(body, "on_turn_start")
-        elif self.path == "/phone/event":
+        path, _, query = self.path.partition("?")
+        if path == "/hook/stop":
+            self._handle_hook(body, "on_turn_done", query)
+        elif path == "/hook/user-prompt-submit":
+            self._handle_hook(body, "on_turn_start", query)
+        elif path == "/phone/event":
             self._handle_phone_event(body)
         else:
             self._respond(404, b"not found\n")
 
-    def _handle_hook(self, body: bytes, callback_name: str) -> None:
+    def _handle_hook(self, body: bytes, callback_name: str,
+                     query: str = "") -> None:
         try:
             session = parse_hook_payload(body)
         except (ValueError, UnicodeDecodeError) as exc:
             log.warning("bad hook payload on %s: %s", self.path, exc)
             self._respond(400, b"bad hook payload\n")
             return
+        # ?agent=codex tags which harness sent the hook (default claude)
+        params = dict(urllib.parse.parse_qsl(query))
+        session["_agent"] = params.get("agent", "claude")
         self._respond(204)
         self._dispatch(callback_name, session)
 

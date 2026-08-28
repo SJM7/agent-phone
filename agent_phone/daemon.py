@@ -156,10 +156,17 @@ class AgentPhoneDaemon:
 
     def _stop_ptt_hold(self) -> None:
         proc, self._ptt_proc = self._ptt_proc, None
-        if proc is not None:
-            proc.terminate()
 
         def release() -> None:
+            # The repeat loop must be FULLY dead before the key-up goes out,
+            # or its final key-down can land after our release and leave
+            # dictation engaged (took a second hang-up to clear).
+            if proc is not None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
             try:
                 subprocess.run(
                     ["osascript", "-e",
@@ -276,7 +283,7 @@ class AgentPhoneDaemon:
             if self.sessions.get(sid) != _window_key(ref):
                 log.info("linked session %s -> %s", sid, _window_key(ref))
             self.sessions[sid] = _window_key(ref)
-            self.window_agent[_window_key(ref)] = "claude"
+            self.window_agent[_window_key(ref)] = payload.get("_agent", "claude")
         key = self.sessions.get(sid)
         if key:
             self.router.clear_attention(key)
@@ -307,8 +314,10 @@ class AgentPhoneDaemon:
         if not self.stt_command:
             log.info("no --stt-command configured; audio saved to %s", wav_path)
             return
-        cmd = [arg.replace("{wav}", str(wav_path))
-               for arg in shlex.split(self.stt_command)]
+        cmd = [str(pathlib.Path(arg).expanduser()) if arg.startswith("~")
+               else arg
+               for arg in (a.replace("{wav}", str(wav_path))
+                           for a in shlex.split(self.stt_command))]
         try:
             out = subprocess.run(cmd, capture_output=True, text=True,
                                  timeout=120, check=True)
@@ -526,11 +535,15 @@ def main() -> None:
     parser.add_argument("--dictation-key", default=" ",
                         help="key held for Claude Code push-to-talk "
                              "(default: space)")
-    parser.add_argument("--stt-command", default=None,
-                        help="speech-to-text command for --voice record; "
+    default_model = pathlib.Path.home() / ".agent-phone/models/ggml-base.en.bin"
+    default_stt = (f"whisper-cli -nt -m {default_model} -f {{wav}}"
+                   if default_model.exists() else None)
+    parser.add_argument("--stt-command", default=default_stt,
+                        help="speech-to-text command for record mode; "
                              "{wav} is replaced with the recording path; "
                              "stdout is the transcript "
-                             "(e.g. 'whisper-cli -nt -f {wav}')")
+                             "(default: whisper-cli with the model in "
+                             "~/.agent-phone/models, if present)")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(
