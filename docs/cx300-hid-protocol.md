@@ -113,7 +113,11 @@ only observes them.
 
 ## Output report `0x02` (telephony collection)
 
-`[0x02, 0x00]` speakerphone LED off, `[0x02, 0x01]` on.
+`[0x02, 0x01]` lights the **red message-waiting LED on the `1` key** (the
+voicemail symbol); `[0x02, 0x00]` turns it off. Community docs called this
+the "speakerphone LED" — on the CX300 the physical indicator is the
+voicemail light (the descriptor declares it as LED-page usage Off-Hook;
+confirmed visually on live hardware, August 2026).
 
 ## Vendor collection: reports `0x13`–`0x17`
 
@@ -129,6 +133,15 @@ A live probe on this project's phone (August 2026) found **no native
 flash/blink pattern**: codes `0x02` and `0x09`–`0x0B` did nothing visible,
 and `0x06`/`0x08` showed steady output, not blinking. To blink the LED,
 toggle `0x16` color/off from the host (~1 Hz works well).
+
+The `0x16` report has a second data byte (see the
+[descriptor](cx300-hid-descriptor.md)). Live probing found: bits 4–5 are a
+**relative hardware mic-mute control** — `[0x16, color, 0x10]` (+1) mutes
+the microphone, `[0x16, color, 0x30]` (−1) unmutes, and `0x00` (all normal
+writes) means "no change", which is why the flag is easy to set by accident
+and impossible to clear with zeros. The mute button's orange LED reflects
+the true mute state. The four flag bits (usages `0xFF1A/1B/1F/20`, values
+`0x01/02/04/08`) produced nothing visible on this firmware.
 
 The `0x17` feature report is the only handshake the phone needs, and it
 must be **resent roughly every 30 seconds**. Without it the phone abandons

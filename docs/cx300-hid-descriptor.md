@@ -55,13 +55,23 @@ property) from a live CX300 in August 2026, then decoded item by item.
 
 Interpretations above the raw hex are hypotheses; the bytes are the facts.
 
+## Probe results (live hardware, August 2026)
+
+- Output 0x02 lights the **red message-waiting LED on the `1` key** (the
+  voicemail symbol) — not the speakerphone button as community docs
+  guessed.
+- 0x16 byte 2, bits 4–5 (usage 0xFF1C, relative −1..1): **hardware mic
+  mute** — +1 (`0x10`) mutes, −1 (`0x30`) unmutes, 0 is a no-op. The mute
+  button's orange LED shows the true state.
+- 0x16 byte 2 flag bits (0xFF1A/1B/1F/20): nothing visible on this
+  firmware.
+
 ## Open questions
 
-- Does output 0x02 light the speakerphone button (visual confirmation)?
-- Do the 0x16 second-byte flags control blinking, brightness, or nothing?
 - Do display layout values 3-15 and areas 6-9 render anything?
 - What do feature reports 0x03/0x04/0x0A/0x18 encode, and are 0x03/0x04/
   0x18 writable to any effect?
+- What fires the never-observed input flag 0xFF1E?
 
 ## Full annotated decode
 
