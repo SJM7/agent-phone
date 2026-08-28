@@ -9,15 +9,19 @@ class StubBackend:
     name = "stub"
 
     def __init__(self):
-        self.led = False
+        self.state = "idle"
         self.led_calls = []
         self.shown = []
         self.dashboards = []
         self.capturing = False
 
-    def set_led(self, on):
-        self.led = on
-        self.led_calls.append(on)
+    def set_led(self, state):
+        self.state = state
+        self.led_calls.append(state)
+
+    @property
+    def led(self):
+        return self.state == "attention"
 
     def show(self, top, bottom):
         self.shown.append((top, bottom))
@@ -104,6 +108,23 @@ def test_reread_after_new_attention(monkeypatch, tmp_path):
     daemon.focus_next()
     assert focused[-1] == refs[1]
     assert daemon.backend.led is False
+
+
+def test_led_priority_attention_over_working_over_idle(monkeypatch, tmp_path):
+    daemon, refs, focused, bind, finish = make_daemon(monkeypatch, tmp_path)
+    for i in range(2):
+        bind(i)
+    assert daemon.backend.state == "idle"
+    daemon._turn_start({"session_id": "s0"})     # frontmost = refs[1] (last bind)
+    assert daemon.backend.state == "working"
+    finish(0)                                    # refs[0] finishes a turn
+    assert daemon.backend.state == "attention"   # attention outranks working
+    daemon.focus_next()                          # read it
+    assert daemon.backend.state == "working"     # s0's turn is still running
+    daemon._turn_done({"session_id": "s0"})
+    assert daemon.backend.state == "attention"  # its result awaits review
+    daemon.focus_next()
+    assert daemon.backend.state == "idle"       # everything read, nothing runs
 
 
 def test_turn_start_still_clears_without_cycling(monkeypatch, tmp_path):

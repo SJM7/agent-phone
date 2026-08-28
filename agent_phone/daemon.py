@@ -62,7 +62,8 @@ class AgentPhoneDaemon:
         self.sessions: dict[str, str] = {}      # agent session_id -> window key
         self.window_agent: dict[str, str] = {}  # window key -> claude|codex|hermes
         self._pending_done: dict[str, asyncio.TimerHandle] = {}
-        self._led_on = False
+        self.busy: set[str] = set()             # window keys with a turn running
+        self._led_state: str | None = None
         self._bindings_path = bindings_path
         self._load_bindings()
 
@@ -354,6 +355,7 @@ class AgentPhoneDaemon:
             if not macfocus.exists(ref):
                 self.router.unbind(key)
                 del self.windows[key]
+                self.busy.discard(key)
                 pruned = True
                 for sid, wkey in list(self.sessions.items()):
                     if wkey == key:
@@ -379,6 +381,7 @@ class AgentPhoneDaemon:
             self.window_agent[_window_key(ref)] = payload.get("_agent", "claude")
         key = self.sessions.get(sid)
         if key:
+            self.busy.add(key)
             self.router.clear_attention(key)
             self._sync_led()
 
@@ -403,6 +406,7 @@ class AgentPhoneDaemon:
         if key is None:
             log.info("turn done for unbound session %s", sid)
             return
+        self.busy.discard(key)
         if self.router.mark_attention(key):
             log.info("attention: %s", key)
             label = dict(self.router.bindings()).get(key, key)
@@ -448,11 +452,17 @@ class AgentPhoneDaemon:
             log.error("could not paste transcript (left on clipboard): %s", exc)
 
     # -- LED ----------------------------------------------------------------
-    def _sync_led(self) -> None:
-        want = bool(self.router.needs_attention())
-        if want != self._led_on:
-            self._led_on = want
-            self.backend.set_led(want)
+    def _sync_led(self, force: bool = False) -> None:
+        """One lamp, many terminals: show the highest-priority state."""
+        if self.router.needs_attention():
+            state = "attention"
+        elif self.busy:
+            state = "working"
+        else:
+            state = "idle"
+        if force or state != self._led_state:
+            self._led_state = state
+            self.backend.set_led(state)
 
 
 class UsbBackend:
@@ -481,10 +491,10 @@ class UsbBackend:
 
     def _on_connect(self) -> None:
         self.daemon._refresh("ready")
-        self.phone.set_led(bool(self.daemon.router.needs_attention()))
+        self.daemon._sync_led(force=True)
 
-    def set_led(self, on: bool) -> None:
-        self.phone.set_led(on)
+    def set_led(self, state: str) -> None:
+        self.phone.set_led(state)
 
     def show(self, top: str, bottom: str) -> None:
         self.phone.show(top, bottom)
@@ -593,8 +603,8 @@ class SipBackend:
             if pkt.payload_type == self.audio_pt:
                 self._buffer.extend(pkt.payload)
 
-    def set_led(self, on: bool) -> None:
-        self.sip.set_mwi(on)
+    def set_led(self, state: str) -> None:
+        self.sip.set_mwi(state == "attention")
 
     def show(self, top: str, bottom: str) -> None:
         pass  # VVX screen is not driven in this backend

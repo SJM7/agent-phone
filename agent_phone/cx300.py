@@ -72,12 +72,15 @@ class Cx300Phone:
         return self._dev is not None
 
     # -- outputs ------------------------------------------------------------
-    def set_led(self, attention: bool) -> None:
-        """Attention blinks red; all-clear shows steady green."""
-        self._blinking = attention
-        self._blink_lit = attention
+    LED_STATES = {"attention": "red", "working": "orange", "idle": "green"}
+
+    def set_led(self, state: str) -> None:
+        """attention = blinking red, working = steady orange,
+        idle = steady green."""
+        self._blinking = state == "attention"
+        self._blink_lit = self._blinking
         self._next_blink = time.monotonic() + BLINK_INTERVAL
-        self._write(build_led("red" if attention else "green"))
+        self._write(build_led(self.LED_STATES.get(state, "off")))
 
     def _blink_tick(self, now: float) -> None:
         if not self._blinking or now < self._next_blink:
