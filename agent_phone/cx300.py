@@ -27,6 +27,8 @@ log = logging.getLogger(__name__)
 KEEPALIVE_INTERVAL = 25.0
 RECONNECT_INTERVAL = 3.0
 BLINK_INTERVAL = 0.5    # the CX300 has no native flash pattern; we toggle
+SPIN_INTERVAL = 0.3     # working-state spinner cadence (font is ASCII-only:
+SPIN_FRAMES = "|/-\\"   # block/shape glyphs render as nothing on this LCD)
 
 
 class Cx300Phone:
@@ -48,6 +50,10 @@ class Cx300Phone:
         self._blinking = False
         self._blink_lit = False
         self._next_blink = 0.0
+        self._spinning = False
+        self._spin_frame = 0
+        self._next_spin = 0.0
+        self._last_tl = ""
 
     # -- lifecycle ----------------------------------------------------------
     def start(self) -> None:
@@ -75,12 +81,28 @@ class Cx300Phone:
     LED_STATES = {"attention": "red", "working": "orange", "idle": "green"}
 
     def set_led(self, state: str) -> None:
-        """attention = blinking red, working = steady orange,
-        idle = steady green."""
+        """attention = blinking red, working = steady orange (with a
+        spinner ticking on the dashboard), idle = steady green."""
         self._blinking = state == "attention"
         self._blink_lit = self._blinking
         self._next_blink = time.monotonic() + BLINK_INTERVAL
+        self._spinning = state == "working"
         self._write(build_led(self.LED_STATES.get(state, "off")))
+        if not self._spinning and self._last_tl:
+            self._paint_tl(self._last_tl)          # erase a leftover spinner
+
+    def _paint_tl(self, text: str) -> None:
+        self._write(build_area_select("top_left"))
+        for rpt in build_text(sanitize_display_text(text, 16)):
+            self._write(rpt)
+
+    def _spin_tick(self, now: float) -> None:
+        if not self._spinning or now < self._next_spin:
+            return
+        self._next_spin = now + SPIN_INTERVAL
+        self._spin_frame = (self._spin_frame + 1) % len(SPIN_FRAMES)
+        spin = SPIN_FRAMES[self._spin_frame]
+        self._paint_tl(f"{spin} {self._last_tl[:14]}")
 
     def _blink_tick(self, now: float) -> None:
         if not self._blinking or now < self._next_blink:
@@ -91,6 +113,7 @@ class Cx300Phone:
 
     def show_dashboard(self, top_left: str, bottom_left: str,
                        top_right: str, bottom_right: str) -> None:
+        self._last_tl = top_left
         """Four-corner attention dashboard. Left corners are 16 chars (two
         full text chunks), right corners 8 (one chunk), so every report is
         a complete fixed-size packet."""
@@ -166,6 +189,7 @@ class Cx300Phone:
         while not self._stop.is_set():
             now = time.monotonic()
             self._blink_tick(now)
+            self._spin_tick(now)
             if now - last_keepalive > KEEPALIVE_INTERVAL:
                 last_keepalive = now
                 try:

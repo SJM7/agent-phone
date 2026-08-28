@@ -66,9 +66,19 @@ Interpretations above the raw hex are hypotheses; the bytes are the facts.
 - 0x16 byte 2 flag bits (0xFF1A/1B/1F/20): nothing visible on this
   firmware.
 
+- Display layout values 3–15: several (at least 3, 5, 6, 7) accept text
+  and render it in a two-row arrangement similar to the known layouts; no
+  new screen geometry was found. Writing to areas 6–9 in two-line mode
+  corrupts the text stream (renders as CJK garbage) rather than addressing
+  a new region.
+- Font coverage (probed): ASCII renders; CJK renders (observed); block
+  elements (U+2580s), geometric shapes, arrows, stars, and check marks do
+  **not** render. Progress bars must be ASCII (`#`/`-`). The display
+  repaints cleanly at at least 4 updates/second — ASCII spinners and
+  animations work well.
+
 ## Open questions
 
-- Do display layout values 3-15 and areas 6-9 render anything?
 - What do feature reports 0x03/0x04/0x0A/0x18 encode, and are 0x03/0x04/
   0x18 writable to any effect?
 - What fires the never-observed input flag 0xFF1E?

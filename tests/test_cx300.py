@@ -36,6 +36,23 @@ def test_working_state_is_steady_orange():
     assert len(writes) == 1
 
 
+def test_working_spinner_ticks_on_dashboard_headline():
+    phone, writes = make_phone()
+    phone.show_dashboard("done term-1", "next", "*1", "#2")
+    n = len(writes)
+    phone.set_led("working")
+    phone._spin_tick(phone._next_spin + 0.01)
+    # spinner repaints the top-left area with a frame char + headline
+    painted = b"".join(writes[n:])
+    assert bytes([0x14, 0x01, 0x80]) in painted          # top_left select
+    assert "/ done t".encode("utf-16-le") in painted
+    phone._spin_tick(phone._next_spin + 0.01)
+    assert "- done t".encode("utf-16-le") in b"".join(writes)
+    # leaving working state repaints the headline without the spinner
+    phone.set_led("idle")
+    assert "done ter".encode("utf-16-le") in b"".join(writes[-4:])
+
+
 def test_blink_stops_to_steady_green():
     phone, writes = make_phone()
     phone.set_led("attention")
