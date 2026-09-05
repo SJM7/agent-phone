@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Workbench — rough draft</title>
+<style>
+/* Intentionally unfinished: a realistic mix of default HTML and inconsistent CSS. */
+body{margin:18px;background:#fafafa;color:#161616;font-family:Arial,sans-serif}
+header{border-bottom:2px solid #888;padding:7px;display:flex;align-items:center;gap:55px}
+header strong{font:28px Georgia,serif}header nav{display:flex;gap:9px;flex-wrap:wrap}a{color:#164fc4}
+.account{margin-left:auto;font-size:11px}.layout{display:grid;grid-template-columns:175px minmax(0,1fr);gap:35px;margin-top:25px}
+aside{background:#e8e8e8;padding:10px;align-self:start}aside a{display:block;padding:12px 0}aside small{font-size:10px}
+main{padding-right:12px}.intro{display:flex;justify-content:space-between;align-items:start;gap:15px}h1{font-size:18px;font-weight:normal;margin-bottom:3px}.intro p{font:24px Georgia,serif;margin-top:9px}.tag{font-size:10px;color:#777}
+button{cursor:pointer;padding:6px 10px}.loud{background:#2047dd;color:white;border:0;padding:17px 23px;font-size:17px}.filters{display:flex;gap:5px;align-items:center;background:#eee;padding:7px;margin:40px 0 12px}.filters input{width:155px;padding:4px}.filters select{padding:9px}.filters label{font-size:11px}
+.stats{display:flex;gap:35px;margin:12px 0 34px}.stats div{padding:11px;border:1px solid #bbb;min-width:150px}.stats strong{font-size:16px}.stats span{display:block;font-size:10px;color:#777;margin-top:4px}.stats .attention{background:#fff7ca;font-size:24px;flex:1}
+.projects{display:grid;grid-template-columns:1fr 1fr;gap:11px}.project{border:1px solid #aaa;padding:14px;background:white}.project:nth-child(2){background:#f0f1f8;padding:29px 10px 10px}.project h2{font-size:23px;margin:0 0 5px}.project p{font-size:12px;line-height:1.15;max-width:400px}.project .state{float:right;font-size:10px;background:#eee;padding:4px}.project footer{margin-top:25px;display:flex;justify-content:space-between;align-items:center}.project:nth-child(3){grid-column:1 / -1;max-width:480px;margin-top:13px}.progress{height:4px;background:#ddd;margin:19px 0}.progress span{display:block;height:100%;background:#41685b;width:62%}
+.lower{display:grid;grid-template-columns:1.5fr 1fr;gap:70px;margin-top:48px}.activity{border-top:1px solid #bbb}.activity h2{font-size:14px}.activity li{padding:14px 0;font-size:12px}.activity time{font-size:10px;color:#aaa;margin-left:25px}.invite{padding:18px;background:#e5ecf3}.invite h2{font-size:27px;margin:0}.invite label{display:block;font-size:11px;margin:20px 0 4px}.invite input{padding:8px;width:85%}.invite button{margin-top:12px}.error{color:#bf1616;font-size:12px;min-height:18px}.site-footer{margin:60px 0 100px;border-top:1px solid #bbb;padding-top:9px;font-size:10px;color:#666;display:flex;justify-content:space-between}
+dialog{border:1px solid #888;width:330px;padding:25px}dialog[open]{position:fixed;top:20%;left:50%;margin:0;transform:translateX(-50%);z-index:1000;background:white;box-shadow:0 10px 50px #0003}dialog label{display:block;margin:20px 0 5px}dialog input{width:90%;padding:8px}dialog menu{padding:0;display:flex;justify-content:space-between;margin-top:25px}
+@media(max-width:720px){header{gap:18px}.layout{grid-template-columns:1fr;gap:12px}aside{display:flex;gap:20px;overflow:auto;white-space:nowrap}aside small{display:none}.intro{display:block}.stats{gap:8px;overflow:auto}.projects{grid-template-columns:1fr}.lower{grid-template-columns:1fr;gap:20px}.filters{flex-wrap:wrap}.account{display:none}}
+</style>
+</head>
+<body>
+<header><strong>Workbench</strong><nav><a href="#projects">Projects</a><a href="#activity">Activity</a><a href="#invite">Team</a></nav><span class="account">Alex Morgan · Personal workspace</span><button id="settings">Settings</button></header>
+<div class="layout">
+<aside><b>Workspace</b><a href="#projects">Overview</a><a href="#projects">All projects (3)</a><a href="#activity">Recent activity</a><a href="#invite">People</a><hr><small>Storage used: 2.4 GB of 5 GB</small></aside>
+<main>
+<section class="intro"><div><span class="tag">HOME / YOUR WORKSPACE</span><h1>Overview</h1><p>Everything you're working on, somewhere here.</p></div><button class="loud" id="new-project">+ New project</button></section>
+<div class="stats"><div><strong>3</strong><span>ACTIVE PROJECTS</span></div><div><strong>12</strong><span>TASKS THIS WEEK</span></div><div class="attention">2 awaiting review <span>Someone might need your feedback</span></div></div>
+<section id="projects"><div class="filters"><label for="search">Find project:</label><input id="search" placeholder="Search"><select id="filter" aria-label="Project status"><option value="all">All statuses</option><option value="review">Needs review</option><option value="progress">In progress</option></select><button id="refresh">Refresh data</button><span id="feedback" role="status"></span></div>
+<div class="projects" id="project-list">
+<article class="project" data-state="review"><span class="state">Needs review</span><h2>Website refresh</h2><p>A new home page, navigation, and clearer product pages. The first pass is ready for feedback.</p><div class="progress"><span></span></div><footer><small>Updated 2 hours ago · Sam</small><button class="open-project">Open project →</button></footer></article>
+<article class="project" data-state="progress"><h2>Customer onboarding</h2><span class="state">IN PROGRESS</span><p>Reduce the number of steps between signing up and getting something useful done.</p><footer><button class="loud open-project">Continue</button><small>8 tasks remaining</small></footer></article>
+<article class="project" data-state="review"><span class="state">Waiting</span><h2>Release notes</h2><p>Explain what changed and why it matters. Ready for a final read.</p><footer><small>Due tomorrow</small><a href="#activity">View details</a><button class="open-project">Review</button></footer></article>
+</div><p id="empty" hidden>No projects match.</p></section>
+<div class="lower"><section class="activity" id="activity"><h2>Activity feed</h2><ul><li>Sam uploaded a new homepage draft.<time>2 hours ago</time></li><li>You resolved “Update sign-up copy.”<time>Yesterday</time></li><li>Jordan requested a review of release notes.<time>Yesterday</time></li><li>New member joined the workspace.<time>3 days ago</time></li></ul></section>
+<form class="invite" id="invite" novalidate><h2>Invite somebody</h2><p>Bring another person into this workspace.</p><label for="email">Email address</label><input id="email" type="email" placeholder="name@company.com"><div class="error" id="invite-feedback" role="status"></div><button>Send invitation</button><p style="font-size:10px">Demo only. Nothing is sent.</p></form></div>
+<footer class="site-footer"><span>Workbench / Draft 0</span><a href="#projects">Help and documentation</a><span>Last synced just now</span></footer>
+</main></div>
+<dialog id="project-dialog"><form method="dialog"><h2 id="dialog-title">New project</h2><p id="dialog-copy">Start with a name. You can figure out the rest later.</p><label for="project-name">Project name</label><input id="project-name" placeholder="Untitled project"><menu><button value="cancel">Cancel</button><button value="create">Done</button></menu></form></dialog>
+<script>
+const projects=[...document.querySelectorAll('.project')];
+function filter(){let shown=0;for(const p of projects){p.hidden=!(p.textContent.toLowerCase().includes(document.querySelector('#search').value.toLowerCase())&&(document.querySelector('#filter').value==='all'||p.dataset.state===document.querySelector('#filter').value));if(!p.hidden)shown++}document.querySelector('#empty').hidden=shown>0}
+document.querySelector('#search').addEventListener('input',filter);document.querySelector('#filter').addEventListener('change',filter);
+document.querySelector('#refresh').addEventListener('click',e=>{e.target.disabled=true;document.querySelector('#feedback').textContent='Loading…';setTimeout(()=>{e.target.disabled=false;document.querySelector('#feedback').textContent='Up to date.'},1500)});
+document.querySelector('#invite').addEventListener('submit',e=>{e.preventDefault();const input=document.querySelector('#email');document.querySelector('#invite-feedback').textContent=input.value&&input.validity.valid?'Demo invitation ready. No email was sent.':'Enter a valid email address.'});
+function show(title,copy){document.querySelector('#dialog-title').textContent=title;document.querySelector('#dialog-copy').textContent=copy;document.querySelector('#project-dialog').show()}
+document.querySelector('#new-project').onclick=()=>show('New project','Start with a name. You can figure out the rest later.');
+document.querySelectorAll('.open-project').forEach(b=>b.onclick=()=>show(b.closest('article').querySelector('h2').textContent,'Project details are still being worked out.'));
+document.querySelector('#settings').onclick=()=>show('Workspace settings','A placeholder for workspace settings.');
+</script></body></html>

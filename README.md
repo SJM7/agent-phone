@@ -127,6 +127,11 @@ fallback for windows the daemon can't identify.
 
 ## Development
 
+An optional [browser whiteboard prototype](browser-whiteboard/README.md) adds
+numbered element marks, region boundaries, and freehand sketches over live
+pages, with screenshots and exports for each UI iteration. It runs independently
+as an unpacked Chromium extension; the phone setup above is unchanged.
+
 ```sh
 uv run --group dev pytest
 ```

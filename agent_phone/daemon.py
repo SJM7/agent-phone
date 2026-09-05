@@ -48,7 +48,8 @@ class AgentPhoneDaemon:
                  stt_command: str | None = None,
                  voice_mode: str = "claude",
                  dictation_key: str = " ",
-                 bindings_path: pathlib.Path = BINDINGS_PATH) -> None:
+                 bindings_path: pathlib.Path = BINDINGS_PATH,
+                 whiteboard_dir: pathlib.Path | None = None) -> None:
         self.stt_command = stt_command
         self.voice_mode = voice_mode          # claude | record | off
         self.dictation_key = dictation_key
@@ -66,12 +67,16 @@ class AgentPhoneDaemon:
         self._led_state: str | None = None
         self._bindings_path = bindings_path
         self._load_bindings()
+        from agent_phone.whiteboard import WhiteboardBridge
+        self.whiteboard = WhiteboardBridge(whiteboard_dir) if whiteboard_dir else None
+        self._selected_target = None
+        self._whiteboard_session = None
 
         self.hooks = HookServer(HookCallbacks(
             on_turn_done=lambda p: self._call_soon(self._turn_done, p),
             on_turn_start=lambda p: self._call_soon(self._turn_start, p),
             on_phone_event=lambda e: self._call_soon(self._phone_event, e),
-        ), port=http_port)
+        ), port=http_port, whiteboard=self.whiteboard)
 
     async def run(self) -> None:
         self.loop = asyncio.get_running_loop()
@@ -137,6 +142,7 @@ class AgentPhoneDaemon:
         key = keys[n - 1]
         ref = self.windows.get(key)
         if ref is not None and macfocus.focus(ref):
+            self._selected_target = ref
             log.info("jumped to %d: %s", n, key)
             self.router.clear_attention(key)
             self._refresh(f"{n}: {ref.label}")
@@ -216,6 +222,19 @@ class AgentPhoneDaemon:
         return self.voice_mode
 
     def handle_offhook(self) -> None:
+        if self.whiteboard and self.voice_mode != "off":
+            try:
+                self._whiteboard_session = self.whiteboard.begin(self._selected_target)
+            except ValueError as exc:
+                self._offhook_mode = "off"
+                self._refresh(str(exc))
+                return
+            if self._whiteboard_session:
+                target = self._whiteboard_session["target"]
+                self._whiteboard_session["tty"] = macfocus.tty(target) if target else None
+                self._offhook_mode = "record"
+                self.backend.start_capture()
+                return
         self._offhook_mode = self._active_voice_mode()
         if self._offhook_mode == "claude":
             # Hold Claude Code's push-to-talk key for as long as the receiver
@@ -237,11 +256,19 @@ class AgentPhoneDaemon:
         if mode != "record":
             return
         wav = self.backend.stop_capture()
+        session, self._whiteboard_session = self._whiteboard_session, None
+        if session:
+            self.whiteboard.finish(session)
         if wav is None:
+            if session:
+                self.whiteboard.set_status(session, "failed", "No audio captured; marks remain in Sheets")
             return
         log.info("receiver down: %s", wav)
         assert self.loop is not None
-        self.loop.run_in_executor(None, self._transcribe, wav)
+        if session:
+            self.loop.run_in_executor(None, self._transcribe, wav, session)
+        else:
+            self.loop.run_in_executor(None, self._transcribe, wav)
 
     def _start_ptt_hold(self) -> None:
         if self._ptt_proc is not None:
@@ -328,6 +355,7 @@ class AgentPhoneDaemon:
             return
         key = _window_key(ref)
         self.windows[key] = ref
+        self._selected_target = ref
         self.router.bind(key, ref.label)
         self._save_bindings()
         agent = self._agent_for(ref)
@@ -350,6 +378,7 @@ class AgentPhoneDaemon:
         ref = self.windows.get(key)
         focused = ref is not None and macfocus.focus(ref)
         if focused:
+            self._selected_target = ref
             log.info("%s %s", "browsing" if browsing else "focused", key)
         if not browsing:
             # Notification-log semantics: cycling to a terminal marks it
@@ -439,8 +468,10 @@ class AgentPhoneDaemon:
             self.handle_onhook()
 
     # -- speech to text -----------------------------------------------------
-    def _transcribe(self, wav_path: pathlib.Path) -> None:
+    def _transcribe(self, wav_path: pathlib.Path, session=None) -> None:
         if not self.stt_command:
+            if session:
+                self.whiteboard.set_status(session, "failed", "No transcription command configured; audio retained")
             log.info("no --stt-command configured; audio saved to %s", wav_path)
             return
         cmd = [str(pathlib.Path(arg).expanduser()) if arg.startswith("~")
@@ -451,11 +482,36 @@ class AgentPhoneDaemon:
             out = subprocess.run(cmd, capture_output=True, text=True,
                                  timeout=120, check=True)
         except (subprocess.SubprocessError, OSError) as exc:
+            if session:
+                self.whiteboard.set_status(session, "failed", "Transcription failed; audio and saved marks retained")
             log.error("stt command failed: %s", exc)
             return
         text = out.stdout.strip()
+        if session:
+            prompt = self.whiteboard.bundle(session, text)
+            if prompt and text:
+                self._call_soon(self._deliver_whiteboard, prompt, session)
+            elif prompt:
+                self.whiteboard.set_status(session, "failed", "Empty transcript; handoff saved, not pasted")
+            return
         if text:
             self._call_soon(self._deliver_transcript, text)
+
+    def _deliver_whiteboard(self, text, session):
+        target = session["target"]
+        # Focus is deliberately verified; never fall back to the current browser.
+        actual = None
+        if target is not None and session.get("tty") and macfocus.focus(target):
+            actual = macfocus.frontmost_window()
+        if (actual is None or actual.app != target.app or actual.window_id != target.window_id
+                or actual.tab_index != target.tab_index or actual.session_id != target.session_id
+                or macfocus.tty(actual) != session.get("tty")):
+            self.whiteboard.set_status(session, "failed", "Handoff saved. Select target with # or a phone digit before the next recording; paste brief.md manually for this one.")
+            return
+        if self._deliver_transcript(text):
+            self.whiteboard.set_status(session, "delivered", "Handoff pasted · press Redial to send")
+        else:
+            self.whiteboard.set_status(session, "failed", "Paste failed; handoff saved in " + str(session["path"]))
 
     def _deliver_transcript(self, text: str) -> None:
         try:
@@ -465,8 +521,10 @@ class AgentPhoneDaemon:
                  'tell application "System Events" to keystroke "v" using command down'],
                 capture_output=True, timeout=5, check=True)
             log.info("transcript delivered (%d chars)", len(text))
+            return True
         except (subprocess.SubprocessError, OSError) as exc:
             log.error("could not paste transcript (left on clipboard): %s", exc)
+            return False
 
     # -- LED ----------------------------------------------------------------
     def _sync_led(self, force: bool = False) -> None:
@@ -662,6 +720,8 @@ def main() -> None:
     parser.add_argument("--sip-port", type=int, default=5060)
     parser.add_argument("--rtp-port", type=int, default=4000)
     parser.add_argument("--http-port", type=int, default=8489)
+    parser.add_argument("--whiteboard-dir", type=pathlib.Path,
+                        help="Enable authenticated local whiteboard handoffs in this directory")
     parser.add_argument("--voice", choices=("claude", "record", "off"),
                         default="claude",
                         help="claude: hold Claude Code's push-to-talk key "
@@ -687,7 +747,8 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     daemon = AgentPhoneDaemon(args.http_port, args.stt_command,
                               voice_mode=args.voice,
-                              dictation_key=args.dictation_key)
+                              dictation_key=args.dictation_key,
+                              whiteboard_dir=args.whiteboard_dir)
     if args.backend == "usb":
         daemon.backend = UsbBackend(args.audio_device)
     else:

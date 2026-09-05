@@ -37,6 +37,33 @@ class StubBackend:
         return None
 
 
+def test_whiteboard_delivery_pins_target_and_refuses_fallback(monkeypatch, tmp_path):
+    from agent_phone.whiteboard import WhiteboardBridge
+    d, refs, focused, bind, _ = make_daemon(monkeypatch, tmp_path)
+    d.whiteboard = WhiteboardBridge(tmp_path / "handoffs")
+    bind(0)
+    d.whiteboard.request({"op": "heartbeat", "active": True, "sheetId": "sheet"})
+    s = d.whiteboard.begin(d._selected_target)
+    s["tty"] = "/dev/ttys001"
+    bind(1)  # Changing selection must not retarget the already recorded prompt.
+    pasted = []
+    monkeypatch.setattr(d, "_deliver_transcript", lambda text: pasted.append(text) or True)
+    monkeypatch.setattr(macfocus, "frontmost_window", lambda: refs[0])
+    monkeypatch.setattr(macfocus, "tty", lambda ref: "/dev/ttys001")
+    d._deliver_whiteboard("critique", s)
+    assert focused[-1] == refs[0]
+    assert pasted == ["critique"]
+    assert s["phase"] == "delivered"
+    monkeypatch.setattr(macfocus, "frontmost_window", lambda: refs[1])
+    d._deliver_whiteboard("wrong window", s)
+    assert pasted == ["critique"]
+    assert s["phase"] == "failed"
+    monkeypatch.setattr(macfocus, "frontmost_window", lambda: refs[0])
+    monkeypatch.setattr(macfocus, "tty", lambda ref: "/dev/ttys099")
+    d._deliver_whiteboard("replaced tab", s)
+    assert pasted == ["critique"]
+
+
 def make_daemon(monkeypatch, tmp_path, n_windows=3):
     daemon = AgentPhoneDaemon(http_port=0,
                               bindings_path=tmp_path / "bindings.json")

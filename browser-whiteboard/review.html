@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Whiteboard · Sheets</title><link rel="stylesheet" href="review.css"></head>
+<body>
+  <aside>
+    <a class="wordmark" href="review.html">◒ Whiteboard</a>
+    <p class="eyebrow">YOUR ITERATIONS</p>
+    <nav id="sheets" aria-label="Saved sheets"></nav>
+    <p class="local">Saved in this browser.<br>No account. No uploads.</p>
+  </aside>
+  <main>
+    <header><div><p class="eyebrow" id="phase">VISUAL FEEDBACK</p><h1 id="title">Your working sheets.</h1><p id="source">Mark a page, narrate your thoughts, and keep the references together.</p></div></header>
+    <section id="empty"><h2>A place for “this” and “that.”</h2><p>Open a page you’re working on, then click the extension icon. Hold Option (⌥) / Alt and click an element or drag a boundary. Map that modifier to a side button on your mouse for one-handed marking.</p><p>Each reference keeps a screenshot from that moment. Finish a sheet when you’re ready for the next iteration.</p></section>
+    <div id="detail" hidden>
+      <div class="actions"><button id="export" class="primary">Export sheet .zip</button><button id="copy">Copy model brief</button><button id="delete" class="quiet">Delete sheet</button></div>
+      <p class="help">The ZIP contains numbered PNGs, a Markdown brief, and JSON context. Extract it into your project and give the model its folder path. Copying the brief alone does not include images.</p>
+      <section class="narration"><label for="notes">Your narration <span>optional</span></label><textarea id="notes" placeholder="Paste your phone transcript here, or keep dictating into your terminal and refer to the numbered marks."></textarea><button id="save">Save narration</button><span id="note-status"></span></section>
+      <section id="marks" aria-label="Numbered references"></section>
+    </div>
+    <p id="status" role="status" aria-live="polite"></p>
+  </main>
+  <script src="core.js"></script><script src="zip.js"></script><script src="review.js"></script>
+</body></html>

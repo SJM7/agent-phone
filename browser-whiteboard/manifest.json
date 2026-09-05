@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "Agent Phone · Whiteboard",
+  "version": "0.3.2",
+  "description": "Point, draw, and collect visual feedback on the live page. Keep a sheet for each iteration.",
+  "permissions": ["activeTab", "scripting", "storage", "unlimitedStorage"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "Whiteboard controls", "default_popup": "popup.html" },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": { "default": "Alt+Shift+W" },
+      "description": "Open whiteboard controls"
+    },
+    "toggle-point": {
+      "suggested_key": { "default": "Ctrl+Shift+7", "mac": "MacCtrl+Shift+7" },
+      "description": "Mouse button: Point tool / Browse"
+    },
+    "toggle-box": {
+      "suggested_key": { "default": "Ctrl+Shift+8", "mac": "MacCtrl+Shift+8" },
+      "description": "Mouse button: Box tool / Browse"
+    },
+    "toggle-ink": {
+      "suggested_key": { "default": "Ctrl+Shift+9", "mac": "MacCtrl+Shift+9" },
+      "description": "Mouse button: Ink tool / Browse"
+    },
+    "undo-mark": {
+      "description": "Undo the last whiteboard reference"
+    },
+    "finish-sheet": {
+      "description": "Finish this iteration and start a clean sheet"
+    },
+    "open-sheets": {
+      "description": "Open saved whiteboard sheets"
+    }
+  }
+}

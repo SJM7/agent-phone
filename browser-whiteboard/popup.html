@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Whiteboard controls</title>
+<style>
+*{box-sizing:border-box}body{width:340px;margin:0;padding:20px;background:#fffefa;color:#283c32;font:13px/1.6 system-ui,sans-serif}h1{font-size:18px;margin:0 0 3px}small,p{color:#697463}#page{overflow-wrap:anywhere;font-size:11px;margin-bottom:15px}.tools{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}button{font:inherit;cursor:pointer;border:1px solid #d3dbcc;border-radius:7px;background:#f1f3eb;color:inherit;padding:9px}button:hover{background:#e0e7d6}button:disabled{opacity:.5;cursor:default}#ink{background:#283c32;color:white}#status{white-space:pre-wrap;color:#a13522}details{border-top:1px solid #ddd;padding-top:12px;margin-top:16px}summary{cursor:pointer}pre{font:11px/1.7 system-ui;white-space:pre-wrap;overflow-wrap:anywhere}a{color:#36573d}button:focus-visible{outline:2px solid #df4f30;outline-offset:2px}
+</style></head><body>
+<h1>Whiteboard <small>0.3.2</small></h1>
+<div id="page">Checking this tab…</div>
+<div class="tools"><button data-command="toggle-point">Point</button><button data-command="toggle-box">Box</button><button id="ink" data-command="toggle-ink">Ink</button><button data-command="browse">Browse</button><button data-command="hide">Hide</button><button data-command="open-sheets">Sheets</button></div>
+<p>Choose <strong>Ink</strong>, then left-drag on the page. Point marks an element with a click; Box draws a boundary.</p>
+<p id="status" role="status" aria-live="polite"></p>
+<p id="connection" role="status">Checking saved phone pairing…</p>
+<details><summary>Connect phone (one-time)</summary><p>Paste the bridge-token from your local handoff folder. Only this computer receives screenshots.</p><input id="bridge-token" type="password" placeholder="Bridge token" aria-label="Bridge token"><button id="pair">Connect phone</button></details>
+<details open><summary>Shortcut check</summary><pre id="last">No shortcut received since this extension was reloaded.</pre><pre id="keys"></pre><button id="shortcuts">Open Chrome shortcut settings</button></details>
+<script src="popup.js"></script></body></html>

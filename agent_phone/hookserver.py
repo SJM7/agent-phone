@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 import threading
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -100,6 +101,25 @@ class _Handler(BaseHTTPRequestHandler):
             self._respond(404, b"not found\n")
 
     def do_POST(self):
+        if self.path == "/whiteboard":
+            bridge = getattr(self.server, "whiteboard", None)
+            origin = self.headers.get("Origin", "")
+            if (not bridge or (origin and not origin.startswith("chrome-extension://"))
+                    or not secrets.compare_digest(self.headers.get("Authorization", ""), "Bearer " + bridge.token)):
+                self.close_connection = True
+                self._respond(403, b"bridge authorization required")
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= 64 * 1024 * 1024:
+                    raise ValueError("Invalid body size (maximum 64 MiB)")
+                self.connection.settimeout(15)
+                result = bridge.request(parse_hook_payload(self.rfile.read(length)))
+                self._respond(200, json.dumps(result).encode(), "application/json")
+            except (ValueError, KeyError, TypeError, OSError) as exc:
+                self.close_connection = True
+                self._respond(400, json.dumps({"error": str(exc)}).encode(), "application/json")
+            return
         body = self._read_body()
         path, _, query = self.path.partition("?")
         if path == "/hook/stop":
@@ -143,11 +163,12 @@ class HookServer:
     from ``server.port``.
     """
 
-    def __init__(self, callbacks: HookCallbacks, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
+    def __init__(self, callbacks: HookCallbacks, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, whiteboard=None):
         self.callbacks = callbacks
         self._httpd = ThreadingHTTPServer((host, port), _Handler)
         self._httpd.daemon_threads = True
         self._httpd.hook_callbacks = callbacks
+        self._httpd.whiteboard = whiteboard
         self._thread: threading.Thread | None = None
 
     @property
