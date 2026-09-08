@@ -66,7 +66,7 @@ class AgentPhoneDaemon:
         self.busy: set[str] = set()             # window keys with a turn running
         self._led_state: str | None = None
         self._bindings_path = bindings_path
-        self._load_bindings()
+        self._save_bindings()
         from agent_phone.whiteboard import WhiteboardBridge
         self.whiteboard = WhiteboardBridge(whiteboard_dir) if whiteboard_dir else None
         self._selected_target = None
@@ -323,23 +323,8 @@ class AgentPhoneDaemon:
                                     f"*{len(waiting)}", f"#{len(labels)}")
 
     # -- binding / focus ----------------------------------------------------
-    def _load_bindings(self) -> None:
-        try:
-            entries = json.loads(self._bindings_path.read_text())
-        except (OSError, ValueError):
-            return
-        for entry in entries:
-            try:
-                ref = macfocus.WindowRef.from_dict(entry)
-            except (KeyError, TypeError):
-                continue
-            key = _window_key(ref)
-            self.windows[key] = ref
-            self.router.bind(key, ref.label)
-        if self.windows:
-            log.info("restored %d binding(s)", len(self.windows))
-
     def _save_bindings(self) -> None:
+        """Write a current-session snapshot; never restore it on startup."""
         try:
             self._bindings_path.parent.mkdir(parents=True, exist_ok=True)
             self._bindings_path.write_text(json.dumps(

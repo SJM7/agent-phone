@@ -302,7 +302,7 @@ def test_zero_minimizes_all_bound(monkeypatch, tmp_path):
     assert empty.backend.dashboards[-1][0] == "nothing bound"
 
 
-def test_bindings_persist_across_restart(monkeypatch, tmp_path):
+def test_restart_clears_bindings_until_explicitly_rebound(monkeypatch, tmp_path):
     path = tmp_path / "bindings.json"
     monkeypatch.setattr(macfocus, "exists", lambda ref: True)
     ref = WindowRef(app="Terminal", window_id=42, tab_index=1, label="term-42")
@@ -311,13 +311,20 @@ def test_bindings_persist_across_restart(monkeypatch, tmp_path):
     d1 = AgentPhoneDaemon(http_port=0, bindings_path=path)
     d1.backend = StubBackend()
     d1.bind_frontmost()
-    assert path.exists()
+    assert d1.router.bindings() == [("Terminal:42", "term-42")]
+    assert "Terminal" in path.read_text()
 
     d2 = AgentPhoneDaemon(http_port=0, bindings_path=path)   # fresh "restart"
     d2.backend = StubBackend()
+    assert d2.router.bindings() == []
+    assert d2.windows == {}
+    assert path.read_text() == "[]"
+    d2._turn_start({"session_id": "s1"})
+    d2._turn_done({"session_id": "s1"})
+    assert d2.sessions == {}
+    assert d2.backend.led is False
+    d2.handle_key("#")
     assert d2.router.bindings() == [("Terminal:42", "term-42")]
-    assert d2.windows["Terminal:42"] == ref
-    # a session can link and mark attention right away after restart
     d2._turn_start({"session_id": "s1"})
     d2._turn_done({"session_id": "s1"})
     assert d2.backend.led is True

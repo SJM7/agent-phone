@@ -67,6 +67,9 @@ one tiny hook script serves them all.
 
 ## The keypad
 
+Bindings last for the current daemon session. After a restart, press `#`
+to bind each terminal again.
+
 | Control | Action |
 |---|---|
 | `#` | bind the focused terminal |
