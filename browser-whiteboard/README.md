@@ -197,11 +197,62 @@ and [Claude Code](https://code.claude.com/docs/en/skills).
 - No automatic submission, exact speech alignment, background terminal input,
   or app-specific breakpoint macros. Terminal routing requires the opt-in bridge.
 
+## Recorded reviews
+
+Recorded reviews extend the opt-in phone bridge above. Start the daemon with
+`--voice record --whiteboard-dir ~/.agent-phone/handoffs`, pair the extension,
+and bind the destination terminal with the phone's `#` key. Bindings are cleared
+when the daemon restarts.
+
+On the working page, open the extension and choose **Review this tab**. This
+explicit action grants Chrome access to the selected tab's video. Lift the
+receiver and review normally: click, scroll, and narrate. Use the review bookmark
+control to mark a problem, then continue explaining it. The **bookmark-review**
+extension command can be assigned in `chrome://extensions/shortcuts` and used
+by a programmable USB pedal. It has no default shortcut because the extension
+already uses Chrome's four suggested-shortcut slots.
+
+On hang-up, video and selected before/at/after frames are saved with the click
+history and full handset transcript. Existing drawn annotations join the same
+handoff. A review can contain bookmarks without drawn marks. The terminal
+receives the handoff for review; Redial remains the explicit send action.
+
+New files in the handoff folder:
+
+- `review.md`: bookmark timeline, nearby interactions, and links to frames.
+- `review.json`: recording status, timestamps, bookmark and interaction metadata.
+- `review.webm`: retained local tab video for additional frame extraction.
+- `review-N-frame-M.png`: selected frames for review bookmark N, separate from
+  the existing drawn `mark-N.png` references.
+
+Frames and interactions use milliseconds from video start. `recordingOffsetMs`
+records video start relative to the phone session. The receiver and browser
+communicate asynchronously, so video can begin slightly after handset audio.
+There is no exact word-to-frame alignment. Sparse selected frames can miss a
+brief flicker; use the retained WebM to inspect a narrower interval. For example,
+with an installed FFmpeg, `ffmpeg -ss 12 -i review.webm -frames:v 1 frame-12s.png`
+extracts a frame near twelve seconds without modifying the recording.
+
+Recording is limited to ten minutes and 128 MiB of video, with at most 50
+bookmarks, five frames per bookmark, and 1,000 interaction events. Limit or
+interruption status is retained in the handoff. Video is a bounded whole-review
+recording; bookmark ranges identify the preceding context without assuming
+arbitrary WebM chunks are independently playable clips.
+
+Interaction metadata omits form values, arbitrary typed keys, and URL queries
+and fragments. Screenshots and video still contain the visible page, including
+any displayed form contents. Select only the tab you intend to review. This
+does not capture the desktop, native wallet windows, microphone audio, or other
+tabs. Cross-origin navigation and tab closure interrupt the review. Browser
+element hints cannot identify controls inside native mobile wallet apps.
+
 ## Storage and permissions
 
 `activeTab` allows access only when you invoke the extension on a page.
 `scripting` injects the overlay. `storage` and `unlimitedStorage` keep potentially
 large screenshot sheets locally without the normal 10 MB extension quota.
+`tabCapture` supplies the explicitly selected review tab's video; `offscreen`
+keeps its recorder alive independently of the service worker and popup.
 The only persistent host permission is `http://127.0.0.1/*` (Chrome match patterns
 cannot restrict it to one port). Code sends only to the authenticated bridge on
 port 8489, after one-time pairing. There are no remote uploads. The bridge binds

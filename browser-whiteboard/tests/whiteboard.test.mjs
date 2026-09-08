@@ -15,7 +15,7 @@ test("live page → numbered references → frozen iteration → usable export",
   const temp = await mkdtemp(join(tmpdir(), "agent-whiteboard-test-"));
   const extension = join(temp, "extension");
   await mkdir(extension);
-  for (const file of ["manifest.json", "background.js", "core.js", "overlay.js", "review.html", "review.css", "review.js", "zip.js", "popup.html", "popup.js"]) await cp(join(extensionDir, file), join(extension, file));
+  for (const file of ["manifest.json", "background.js", "core.js", "review-events.js", "overlay.js", "review.html", "review.css", "review.js", "zip.js", "popup.html", "popup.js", "offscreen.html", "offscreen.js"]) await cp(join(extensionDir, file), join(extension, file));
   const manifest = JSON.parse(await readFile(join(extension, "manifest.json"), "utf8"));
   // Headless automation cannot physically click Chrome's toolbar to grant activeTab.
   // Broader access exists ONLY in this disposable fixture; production is activeTab-only.

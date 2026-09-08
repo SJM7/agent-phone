@@ -47,6 +47,8 @@
       <select aria-label="Hold-to-mark key" title="Map a mouse button to this held key"><option value="Alt">Hold ⌥ / Alt</option><option value="F8">Hold F8</option></select>
       <button data-action="undo" title="Undo the last mark · Ctrl/⌘ Z while drawing">↶ Undo</button>
       <button data-action="review" title="Review sheets and export for your model">Sheets</button>
+      <button data-action="bookmark-review" title="Save before, now, and after frames in the active handset review" disabled>Bookmark review</button>
+      <button data-action="stop-review" title="Stop the active handset review" disabled>Stop review</button>
       <button data-action="finish" class="finish" title="Save this iteration and start a clean sheet">Finish sheet</button>
       <button data-action="hide" aria-label="Hide whiteboard" title="Reopen with extension icon or Alt Shift W">×</button>
     </nav>`;
@@ -57,7 +59,7 @@
   const bridgeLabel = document.createElement("div");
   bridgeLabel.style.cssText = "position:fixed;top:8px;right:8px;background:#fffefa;color:#283c32;padding:6px 10px;border:1px solid #cbd4c4;border-radius:6px;font:12px system-ui;pointer-events:none";
   root.append(bridgeLabel);
-  let bridgePolling = false, bridgeLocked = false;
+  let bridgePolling = false, bridgeLocked = false, reviewState = "idle";
   const page = () => ({ url: location.href, title: document.title });
   const viewport = () => ({ width: innerWidth, height: innerHeight, dpr: devicePixelRatio, scrollX, scrollY });
   const sameView = (a, b) => a.width === b.width && a.height === b.height && a.scrollX === b.scrollX && a.scrollY === b.scrollY;
@@ -86,6 +88,8 @@
     root.querySelector('[data-action="undo"]').disabled = busy || !sheet?.marks.length;
     root.querySelector('[data-action="finish"]').disabled = busy || !sheet?.marks.length;
     root.querySelector('[data-action="review"]').disabled = busy || !sheet;
+    root.querySelector('[data-action="bookmark-review"]').disabled = busy || reviewState !== "recording";
+    root.querySelector('[data-action="stop-review"]').disabled = busy || !["arming", "armed", "recording"].includes(reviewState);
     root.querySelector(".iteration").textContent = String(sheet?.iteration || 1).padStart(2, "0");
     schedule();
   }
@@ -197,6 +201,41 @@
   }
   function ownEvent(e) { return e.composedPath().includes(host); }
   function editable(e) { return e.composedPath().some(n => n instanceof Element && (n.matches("input,textarea,select") || n.isContentEditable)); }
+  function editableNode(node) {
+    for (let current = node; current instanceof Element; current = current.parentElement) {
+      if (current.matches("input,textarea,select") || current.isContentEditable || ["textbox", "searchbox"].includes(current.getAttribute("role"))) return true;
+    }
+    return false;
+  }
+  function reviewSelector(node) {
+    const parts = [];
+    for (let current = node, depth = 0; current instanceof Element && depth < 6; depth++, current = current.parentElement) {
+      if (current.id) { parts.unshift(`#${CSS.escape(current.id)}`); break; }
+      let segment = current.localName;
+      if (current.parentElement) {
+        const siblings = [...current.parentElement.children].filter(sibling => sibling.localName === current.localName);
+        if (siblings.length > 1) segment += `:nth-of-type(${siblings.indexOf(current) + 1})`;
+      }
+      parts.unshift(segment);
+    }
+    return parts.join(" > ");
+  }
+  function reviewTarget(node) {
+    if (!(node instanceof Element)) return undefined;
+    const bounds = node.getBoundingClientRect(), sensitive = editableNode(node), role = node.getAttribute("role");
+    return { tag: node.localName, role, ...(sensitive ? {} : { name: node.getAttribute("aria-label"),
+      testId: node.getAttribute("data-testid") || node.getAttribute("data-test"), selector: reviewSelector(node) }),
+      bounds: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height }, expanded: node.getAttribute("aria-expanded"),
+      disabled: node.matches(":disabled") || node.getAttribute("aria-disabled") === "true" };
+  }
+  let lastPointerTarget = null;
+  function reviewEvent(event, type = event.type) {
+    if (reviewState !== "recording" || ownEvent(event)) return;
+    const target = type === "click" && lastPointerTarget?.at > performance.now() - 3000 ? lastPointerTarget.target : reviewTarget(event.target);
+    const input = { type, atMs: performance.now(), url: location.href, viewport: { width: innerWidth, height: innerHeight }, scroll: { x: scrollX, y: scrollY }, ...(target ? { target } : {}) };
+    const normalized = globalThis.AgentReviewEvents?.normalizeEvent?.(input);
+    if (normalized) send("review-event", { event: normalized, wallAt: Date.now() }).catch(() => {});
+  }
   function stop(e) { e.preventDefault(); e.stopImmediatePropagation(); }
   function point(e) { return { x: e.clientX, y: e.clientY }; }
   window.addEventListener("keydown", e => {
@@ -213,6 +252,19 @@
     if (e.key === modifier && held) { stop(e); held = false; hover = null; update(); }
   }, true);
   window.addEventListener("blur", () => { held = false; gesture = null; hover = null; update(); });
+  document.addEventListener("pointerdown", event => {
+    if (reviewState === "recording" && !ownEvent(event)) lastPointerTarget = { at: performance.now(), target: reviewTarget(event.target) };
+  }, true);
+  document.addEventListener("click", event => reviewEvent(event), true);
+  document.addEventListener("pointerover", event => reviewEvent(event, "pointerenter"), true);
+  document.addEventListener("pointerout", event => reviewEvent(event, "pointerleave"), true);
+  document.addEventListener("dragstart", event => reviewEvent(event), true);
+  document.addEventListener("drop", event => reviewEvent(event), true);
+  let reviewScrollTimer = 0;
+  window.addEventListener("scroll", event => {
+    if (reviewScrollTimer || reviewState !== "recording") return;
+    reviewScrollTimer = setTimeout(() => { reviewScrollTimer = 0; reviewEvent(event); }, 150);
+  }, { capture: true, passive: true });
   document.addEventListener("visibilitychange", () => { if (document.hidden) { held = false; gesture = null; update(); } });
   surface.addEventListener("pointerdown", e => {
     if (busy || bridgeLocked || e.button !== 0) return;
@@ -293,6 +345,15 @@
     try {
       if (action === "undo" && sheet.marks.length) { anchors.delete(sheet.marks.at(-1).id); sheet = await send("undo"); defaultHint(); }
       if (action === "review") await send("review");
+      if (action === "bookmark-review") {
+        status("Saving review frames…");
+        await send("review-bookmark", { label: "Bookmark" });
+        status("Review bookmark saved.");
+      }
+      if (action === "stop-review") {
+        await send("review-stop"); reviewState = "stopped";
+        status("Review stopped. Its assets stay local until the handset handoff finishes.");
+      }
       if (action === "finish") {
         const result = await send("finish", { page: page() });
         sheet = result.next; anchors.clear(); tool = "browse"; held = false;
@@ -312,6 +373,11 @@
       bridgeLocked = state.phase === "finishing";
       if (bridgeLocked) { tool = "browse"; held = false; hover = null; }
       if (state.next) { sheet = state.next; anchors.clear(); tool = "browse"; bridgeLocked = false; defaultHint(); }
+      const review = await send("review-status");
+      reviewState = review?.state || "idle";
+      if (reviewState === "recording") bridgeLabel.textContent = "Review recording · selected-tab video";
+      else if (reviewState === "armed") bridgeLabel.textContent = "Review armed · start handset recording";
+      else if (["failed", "upload-failed"].includes(reviewState)) bridgeLabel.textContent = "Review " + reviewState + " · " + (review.error || "check controls");
       update();
     } catch (error) {
       bridgeLabel.textContent = "Phone bridge offline · marks still saved in Sheets";

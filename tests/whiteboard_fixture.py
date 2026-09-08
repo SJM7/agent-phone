@@ -20,9 +20,16 @@ try:
         elif op == "finish":
             b.finish(s)
             result = {"ok": True}
+        elif op == "failed":
+            b.finish(s)
+            b.set_status(s, "failed", "Test handset delivery failed (no terminal input)")
+            result = {"ok": True}
         elif op == "bundle":
             prompt = b.bundle(s, "Move reference 1 to the tip of reference 2.")
             b.set_status(s, "delivered", "Test handoff saved (no terminal input)")
+            result = {"prompt": prompt, "path": str(s["path"])}
+        elif op == "bundle-failed":
+            prompt = b.bundle(s, "Move reference 1 to the tip of reference 2.")
             result = {"prompt": prompt, "path": str(s["path"])}
         print(json.dumps(result), flush=True)
 finally:

@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Agent Phone · Whiteboard",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Point, draw, and collect visual feedback on the live page. Keep a sheet for each iteration.",
-  "permissions": ["activeTab", "scripting", "storage", "unlimitedStorage"],
+  "permissions": ["activeTab", "scripting", "storage", "unlimitedStorage", "offscreen", "tabCapture"],
   "host_permissions": ["http://127.0.0.1/*"],
   "background": { "service_worker": "background.js" },
   "action": { "default_title": "Whiteboard controls", "default_popup": "popup.html" },
@@ -32,6 +32,9 @@
     },
     "open-sheets": {
       "description": "Open saved whiteboard sheets"
+    },
+    "bookmark-review": {
+      "description": "Bookmark the current moment in an armed review recording"
     }
   }
 }

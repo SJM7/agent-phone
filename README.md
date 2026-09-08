@@ -135,6 +135,12 @@ numbered element marks, region boundaries, and freehand sketches over live
 pages, with screenshots and exports for each UI iteration. It runs independently
 as an unpacked Chromium extension; the phone setup above is unchanged.
 
+The opt-in [recorded review workflow](browser-whiteboard/README.md#recorded-reviews)
+adds tab video, timestamped interactions, and bookmarked frames to handset
+handoffs. A keyboard shortcut can mark a moment now and later be assigned to a
+USB foot pedal. Recording is explicitly armed for one tab; it does not change
+your house styles or submit feedback automatically.
+
 ```sh
 uv run --group dev pytest
 ```
