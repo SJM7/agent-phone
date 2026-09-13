@@ -8,7 +8,44 @@ let queue = Promise.resolve();
 let lastCapture = 0;
 const WATCH_PREFIX = "whiteboard-tab:";
 const REVIEW_SESSION = "review-recording";
+const HANDOFF_PREFIX = "whiteboard-handoff:";
 let creatingOffscreen;
+
+async function handoffPin(tabId) {
+  return (await chrome.storage.session.get(HANDOFF_PREFIX + tabId))[HANDOFF_PREFIX + tabId] || null;
+}
+async function putHandoffPin(tabId, state, sheet) {
+  const pin = { phoneId: state.id, sheetId: sheet.id };
+  await chrome.storage.session.set({ [HANDOFF_PREFIX + tabId]: pin });
+  return pin;
+}
+async function clearHandoffPin(tabId) {
+  await chrome.storage.session.remove(HANDOFF_PREFIX + tabId);
+}
+
+async function pinnedHandoffSheet(tab, displayed) {
+  const pin = await handoffPin(tab.id);
+  if (!pin) return { sheet: displayed, pin: null };
+  try {
+    const sheet = await getSheet(pin.sheetId);
+    if (sheet.tabId !== tab.id) throw new Error("Pinned sheet belongs to another tab");
+    return { sheet, pin };
+  } catch (_) {
+    // A deleted or malformed pin must not strand a newer displayed draft.
+    await clearHandoffPin(tab.id);
+    return { sheet: displayed, pin: null };
+  }
+}
+
+async function rememberHandoff(tab, sheet, state, pin) {
+  if (["recording", "finishing", "failed"].includes(state?.phase) && state.id) {
+    if (!pin || pin.sheetId !== sheet.id || pin.phoneId !== state.id) await putHandoffPin(tab.id, state, sheet);
+  } else if (pin && pin.sheetId === sheet.id && state?.phase === "ready") {
+    // The daemon no longer knows this pin (for example after a restart). Leave
+    // the saved sheet alone, but let the current draft acquire a later lease.
+    await clearHandoffPin(tab.id);
+  }
+}
 
 async function offscreen() {
   const url = chrome.runtime.getURL("offscreen.html");
@@ -119,6 +156,7 @@ chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
 });
 chrome.tabs.onRemoved.addListener(tabId => {
   chrome.storage.session.remove(WATCH_PREFIX + tabId).catch(() => {});
+  clearHandoffPin(tabId).catch(() => {});
   reviewSession().then(session => session?.tabId === tabId && stopReview("tab-closed")).catch(() => {});
 });
 
@@ -319,6 +357,14 @@ async function handle(message, sender) {
   }
   if (message.type === "finish") {
     if (!s.marks.length) throw new Error("Make a mark before finishing this sheet.");
+    // The handset can begin between overlay polls. Check the sheet being
+    // finished before rotating it so that its later handoff stays pinned.
+    try {
+      const state = await bridgeRequest({ op: "heartbeat", sheetId: s.id, active: false });
+      if (state) await rememberHandoff(tab, s, state, await handoffPin(tab.id));
+    } catch (_) {
+      // Saving an ordinary local sheet must still work while the bridge is off.
+    }
     s.finishedAt = new Date().toISOString();
     await putSheet(s);
     return { finished: s, next: await openDraft(tab, message.page) };
@@ -400,13 +446,15 @@ async function finishReviewFromRecorder() {
   if (state.phase === "delivered") await acknowledgeTerminal(state);
 }
 async function bridgeTick(message, tab) {
-  const sheet = await getSheet(message.id);
-  if (sheet.tabId !== tab.id) throw new Error("Wrong whiteboard tab");
+  const displayed = await getSheet(message.id);
+  if (displayed.tabId !== tab.id) throw new Error("Wrong whiteboard tab");
+  const { sheet, pin } = await pinnedHandoffSheet(tab, displayed);
   const window = await chrome.windows.get(tab.windowId);
   const current = await chrome.tabs.get(tab.id);
   const state = await bridgeRequest({ op: "heartbeat", sheetId: sheet.id,
     active: Boolean(message.active && current.active && window.focused && !sheet.finishedAt) });
   if (!state) return { phase: "unpaired" };
+  await rememberHandoff(tab, sheet, state, pin);
   try {
     await startReviewForHeartbeat(state, sheet);
   } catch (error) {
@@ -421,8 +469,14 @@ async function bridgeTick(message, tab) {
   if (state.phase === "failed") await finalizeFailedReview(state, sheet);
   if (["delivered", "failed"].includes(state.phase) && sheet.finishedAt) {
     if (state.phase === "delivered") await acknowledgeTerminal(state);
-    const next = await openDraft(tab, { title: sheet.title, url: sheet.url });
-    return { ...state, next: { ...next, marks: [] } };
+    await clearHandoffPin(tab.id);
+    // A manual finish may already have rotated the visible tab to a newer
+    // draft. Keep that draft (and any new marks) instead of replacing it with
+    // an empty draft derived from the old recording sheet.
+    const next = displayed.id === sheet.id
+      ? await openDraft(tab, { title: sheet.title, url: sheet.url })
+      : displayed;
+    return { ...state, next };
   }
   return state;
 }
@@ -458,6 +512,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (sender.tab && !sender.url?.startsWith(chrome.runtime.getURL("review.html"))) {
       if (value?.marks) value = light(value);
       else if (value?.finished) value = { finished: light(value.finished), next: light(value.next) };
+      else if (value?.next) value = { ...value, next: light(value.next) };
     }
     respond({ ok: true, value });
   }, error => respond({ ok: false, error: error.message }));

@@ -165,17 +165,56 @@ test("live page → numbered references → frozen iteration → usable export",
       await worker.evaluate(() => runCommand("toggle-box"));
       await page.mouse.move(180, 190); await page.mouse.down(); await page.mouse.move(620, 390, { steps: 10 }); await page.mouse.up();
       await overlay.getByText("Reference 1 saved", { exact: false }).waitFor();
+      const recordingSheet = await worker.evaluate(async () => {
+        const sheets = Object.values(await chrome.storage.local.get(null));
+        return sheets.find(sheet => !sheet.finishedAt && sheet.marks?.length === 1);
+      });
+      assert.ok(recordingSheet?.id);
+      // Finishing an iteration remains available during recording. It rotates
+      // the UI, but the later handset handoff must still freeze this sheet.
+      await overlay.getByRole("button", { name: "Finish sheet", exact: true }).click();
+      await overlay.getByText(`Iteration ${recordingSheet.iteration} saved`, { exact: false }).waitFor();
+      await worker.evaluate(() => runCommand("toggle-box"));
+      await page.mouse.move(700, 220); await page.mouse.down(); await page.mouse.move(900, 420, { steps: 10 }); await page.mouse.up();
+      await overlay.getByText("Reference 1 saved", { exact: false }).waitFor();
+      const nextSheet = await worker.evaluate(async originalId => {
+        const sheets = Object.values(await chrome.storage.local.get(null));
+        return sheets.find(sheet => sheet.id !== originalId && !sheet.finishedAt && sheet.marks?.length === 1);
+      }, recordingSheet.id);
+      assert.ok(nextSheet?.id);
+      // A second manual finish probes a ready heartbeat for a different sheet.
+      // It must not clear the original recording pin.
+      await overlay.getByRole("button", { name: "Finish sheet", exact: true }).click();
+      await overlay.getByText(`Iteration ${nextSheet.iteration} saved`, { exact: false }).waitFor();
+      await worker.evaluate(() => runCommand("toggle-box"));
+      await page.mouse.move(320, 240); await page.mouse.down(); await page.mouse.move(520, 430, { steps: 10 }); await page.mouse.up();
+      await overlay.getByText("Reference 1 saved", { exact: false }).waitFor();
+      const newerDraft = await worker.evaluate(async ({ originalId, nextId }) => {
+        const sheets = Object.values(await chrome.storage.local.get(null));
+        return sheets.find(sheet => ![originalId, nextId].includes(sheet.id) && !sheet.finishedAt && sheet.marks?.length === 1);
+      }, { originalId: recordingSheet.id, nextId: nextSheet.id });
+      assert.ok(newerDraft?.id);
+      const rotatedSheetIds = await worker.evaluate(async url => Object.values(await chrome.storage.local.get(null))
+        .filter(sheet => sheet.id && sheet.url === url).map(sheet => sheet.id).sort(), page.url());
+      assert.equal((await worker.evaluate(id => getSheet(id), recordingSheet.id)).finishedAt !== null, true);
+      await page.reload();
+      await overlay.getByText("1 mark", { exact: false }).waitFor();
       await request("finish");
       const bundle = await request("bundle");
       assert.match(bundle.prompt, /brief.md/);
       assert.match(await readFile(join(bundle.path, "narration.txt"), "utf8"), /tip of reference 2/);
       const meta = JSON.parse(await readFile(join(bundle.path, "context.json"), "utf8"));
-      assert.equal(meta.marks.length, 1); assert.equal(meta.marks[0].image, undefined);
+      assert.equal(meta.id, recordingSheet.id); assert.equal(meta.marks.length, 1); assert.equal(meta.marks[0].image, undefined);
       const png = await readFile(join(bundle.path, "mark-1.png"));
       assert.equal(png.subarray(1, 4).toString(), "PNG");
       await cp(join(bundle.path, "mark-1.png"), join(extensionDir, "test-results", "bridge-mark.png"));
       await overlay.getByText("Test handoff saved", { exact: false }).waitFor();
-      await overlay.getByText("0 marks", { exact: false }).waitFor();
+      await overlay.getByText("1 mark", { exact: false }).waitFor();
+      const finalSheetIds = await worker.evaluate(async url => Object.values(await chrome.storage.local.get(null))
+        .filter(sheet => sheet.id && sheet.url === url).map(sheet => sheet.id).sort(), page.url());
+      assert.deepEqual(finalSheetIds, rotatedSheetIds, "delivery reuses the rotated draft instead of creating another empty sheet");
+      assert.equal((await worker.evaluate(id => getSheet(id), newerDraft.id)).marks.length, 1);
+      assert.equal(await worker.evaluate(async tabId => (await chrome.storage.session.get("whiteboard-handoff:" + tabId))["whiteboard-handoff:" + tabId], targetId), undefined);
       // Wait for the next sheet's heartbeat, not a stale pre-hangup lease.
       let nextRecording;
       for (let i = 0; i < 20; i++) {

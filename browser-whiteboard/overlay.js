@@ -380,7 +380,7 @@
       else if (["failed", "upload-failed"].includes(reviewState)) bridgeLabel.textContent = "Review " + reviewState + " · " + (review.error || "check controls");
       update();
     } catch (error) {
-      bridgeLabel.textContent = "Phone bridge offline · marks still saved in Sheets";
+      bridgeLabel.textContent = "Phone bridge error · " + (error.message || "Connection failed") + " · marks still saved in Sheets";
     } finally { bridgePolling = false; }
   }, 750);
 })();

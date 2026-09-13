@@ -130,6 +130,13 @@ are allowed and labeled as drafts.
 
 ## Phone bridge (opt-in prototype)
 
+Version 0.4.1 keeps a handset recording attached to its original sheet when you
+choose **Finish sheet** or refresh the page. You can save the current iteration
+while talking; the new sheet belongs to the next iteration. On hang-up, the
+original sheet is still bundled with that recording. Keep the reviewed tab open
+until delivery completes. Reload the extension and refresh the working page
+after updating; saved sheets and pairing are retained.
+
 Version 0.3.2 restores an enabled whiteboard automatically after a same-origin
 page refresh, resuming the saved draft and phone connection. Pairing is stored in
 extension-local storage, not the webpage; the popup now reports saved connection
@@ -158,6 +165,13 @@ is pinned per recording. A window/tab/TTY mismatch prevents pasting. No destinat
 transcription failure, or missing screenshots produces a failure badge and retains
 recoverable files; the system never silently pastes into the browser instead.
 The badge reports local paste success, not confirmation that the model read it.
+
+If delivery fails, the badge shows the underlying error. Check `status.json` in
+the newest handoff folder: `narration.txt` means transcription completed, while
+`context.json` and numbered PNGs mean the visuals arrived. A saved browser sheet
+alone does not mean the phone received it. Export that exact sheet from **Sheets**
+to recover its images alongside the saved narration; do not substitute a newer
+iteration.
 
 Each handoff contains `brief.md`, `narration.txt`, `references.md`, `context.json`,
 annotated `mark-N.png` files, `session.json`, and `status.json`. No ZIP export or

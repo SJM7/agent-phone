@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Agent Phone · Whiteboard",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Point, draw, and collect visual feedback on the live page. Keep a sheet for each iteration.",
   "permissions": ["activeTab", "scripting", "storage", "unlimitedStorage", "offscreen", "tabCapture"],
   "host_permissions": ["http://127.0.0.1/*"],
