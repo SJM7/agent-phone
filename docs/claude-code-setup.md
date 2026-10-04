@@ -84,12 +84,19 @@ One-time setup:
 The push-to-talk key defaults to Space; the daemon holds Space accordingly.
 If Space bothers you (it types spaces when a prompt already has text),
 rebind `voice:pushToTalk` in `~/.claude/keybindings.json` and pass the same
-key to the daemon with `--dictation-key`.
+key to the daemon with `--dictation-key`. `--stt whistle` does not take
+the Claude handset off Space.
+
+The headset button, between mute and speaker, does not hold Space even
+when Claude Code is frontmost. The first press records the Mac's current
+default input. The second press pastes one transcript. The phone lights
+that button's own lamp while the route is active.
 
 Codex CLI note: Codex has no native voice input (experimental voice shipped
-in v0.105 and was removed in v0.118), so Codex terminals automatically get
-local whisper transcription and clipboard paste instead — no flags needed.
-See [codex-setup.md](codex-setup.md) for the Codex hook configuration.
+in v0.105 and was removed in v0.118), so a Codex terminal records the
+phone mic and pastes. `--stt whisper` (the default) runs whisper.cpp
+after hang-up. `--stt whistle` transcribes during the recording and
+pastes once. See [codex-setup.md](codex-setup.md).
 
 ## 4. Testing manually
 

@@ -14,6 +14,8 @@ class StubBackend:
         self.shown = []
         self.dashboards = []
         self.capturing = False
+        self.device = None
+        self.devices = []
 
     def set_led(self, state):
         self.state = state
@@ -29,8 +31,10 @@ class StubBackend:
     def show_dashboard(self, tl, bl, tr, br):
         self.dashboards.append((tl, bl, tr, br))
 
-    def start_capture(self):
+    def start_capture(self, device=None):
         self.capturing = True
+        self.device = device
+        self.devices.append(device)
 
     def stop_capture(self):
         self.capturing = False
@@ -228,6 +232,48 @@ def test_voice_claude_custom_key(monkeypatch, tmp_path):
     d.backend = StubBackend()
     d.handle_offhook()
     assert 'key down "g"' in " ".join(procs[0].cmd)
+
+
+def test_headset_button_toggles_default_mic(monkeypatch, tmp_path):
+    _capture_osascript(monkeypatch)
+    monkeypatch.setattr(daemon_mod, "default_input_name", lambda: "AirPods")
+    d = AgentPhoneDaemon(http_port=0, bindings_path=tmp_path / "b.json",
+                         voice_mode="record")
+    d.backend = StubBackend()
+    # The route already active when the daemon connects is not a press.
+    d.handle_transducer(None, True)
+    assert d.backend.capturing is False
+    d.handle_transducer("headset")
+    assert d.backend.devices == ["AirPods"]
+    assert d.backend.dashboards[-1][0] == "listening"
+    # The phone may also report off-hook for that press. Keep this mic.
+    d.handle_offhook()
+    assert d.backend.devices == ["AirPods"]
+    # Second press lands as the hook falling while the route stays headset.
+    d.handle_onhook()
+    assert d.backend.capturing is False
+    assert d._capture_route is None
+
+    # Leaving the headset route is the other way a second press shows up.
+    d.handle_transducer(None)
+    d.handle_transducer("headset")
+    d.handle_transducer(None)
+    assert d.backend.capturing is False
+    assert d.backend.devices == ["AirPods", "AirPods"]
+
+    # The receiver still records the phone mic, and blocks the headset key.
+    d.handle_offhook()
+    assert d.backend.devices[-1] is None
+    d.handle_transducer("headset")
+    assert d.backend.devices[-1] is None
+    assert d._capture_route == "handset"
+    d.handle_onhook()
+    assert d.backend.capturing is False
+
+    # A hook event while the phone is already on headset uses the default mic.
+    d.handle_transducer("headset", True)
+    d.handle_offhook()
+    assert d.backend.devices[-1] == "AirPods"
 
 
 def test_voice_record_uses_backend_capture(monkeypatch, tmp_path):

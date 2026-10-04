@@ -104,7 +104,8 @@ the report ID in byte 0:
 Live captures for reference: `01 00 0c 00 00 3c b5 00` is `#` pressed while
 on-hook; `01 01 00 00 40 d5 5a 00` is the receiver lifted (off-hook flag
 set, handset transducer active). A key press is reported once with the key
-code and again with `0x00` on release.
+code and again with `0x00` on release. The phone sends no idle input
+report; a report arrives when something changes.
 
 Notes: only one simultaneous keypress registers; a quick hook-flash is
 reported as the hold code; the hook switch is a transmissive optical sensor.
@@ -163,8 +164,6 @@ output fields no community source documents — is in
 - The CX300 **R2** revision has no public descriptor dump; firmware
   differences within the same PID are documented (OE4AMW vs. the original
   work), so treat exact byte values as probe-at-runtime.
-- No complete usage-by-usage annotation of the 529-byte report descriptor
-  has ever been published — community code parses raw report bytes.
 - The digit portion of the keypad table (`0x01` = "0" … `0x0A` = "9")
   follows the community documentation; confirm against your firmware the
   first time you press a key.

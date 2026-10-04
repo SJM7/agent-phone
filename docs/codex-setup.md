@@ -40,18 +40,20 @@ additive), so anything already using it keeps working.
 Codex has no native terminal dictation (it shipped experimentally in
 v0.105, was removed in v0.118, and has not returned; the desktop app got
 voice instead). So for Codex terminals the daemon records the handset audio
-locally and transcribes it with whisper.cpp:
+locally and pastes the transcript:
 
 1. `brew install whisper-cpp`
 2. Put a model at `~/.agent-phone/models/ggml-base.en.bin`
    (`curl -L -o ~/.agent-phone/models/ggml-base.en.bin
    https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin`);
    the daemon picks it up automatically, or point `--stt-command` anywhere.
-3. Lift the receiver in a Codex terminal, talk, hang up: the transcript is
-   pasted into the terminal for review, and Enter submits — same feel as
-   the Claude Code flow, just transcribed on your Mac instead of streamed.
+3. Lift the receiver in a Codex terminal, talk, hang up. The daemon
+   records the Polycom CX300 by name and pastes one transcript. Enter, or
+   Redial, sends. `--stt whistle` transcribes during the recording instead
+   of after hang-up, and falls back to whisper.cpp if that worker fails.
 
-The daemon decides per terminal: windows that linked through Claude Code
-hooks get push-to-talk into Claude's native dictation; windows that linked
-through Codex hooks get record-and-paste. Everything is local for Codex —
-audio never leaves the machine.
+The daemon picks the mode from the harness on that terminal's tty. Live
+detection wins over a stale hook tag. Codex always records and pastes.
+The headset button records the Mac's current default input and pastes on
+the second press, including while Claude Code is frontmost. Codex audio
+stays on the machine.

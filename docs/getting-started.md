@@ -9,15 +9,18 @@ the SIP side.
 
 ```sh
 brew install hidapi ffmpeg          # HID access + audio capture
-brew install whisper-cpp            # local speech-to-text (Codex/Hermes path)
+brew install whisper-cpp            # default local speech-to-text; Whistle falls back to it
 mkdir -p ~/.agent-phone/models
 curl -L -o ~/.agent-phone/models/ggml-base.en.bin \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
 ```
 
-Python 3.11+ via [uv](https://docs.astral.sh/uv/). Plug the phone into USB —
-macOS enumerates its audio with no drivers, and it should become the
-default input device automatically (check System Settings, Sound, Input).
+Python 3.11+ via [uv](https://docs.astral.sh/uv/). Plug the phone into USB.
+macOS enumerates its audio with no drivers. A handset recording opens the
+device named Polycom CX300, so that device does not have to be the system
+default. Claude's and Grok's native dictation record the system default:
+set Input to the phone when you want the handset mic on that path. The
+headset button records whatever is already the default.
 
 ## 2. Run the daemon
 
@@ -30,6 +33,19 @@ DYLD_LIBRARY_PATH=/opt/homebrew/lib uv run python -m agent_phone.daemon -v
 The phone's screen shows the dashboard and the lamp turns green when the
 daemon connects. Leave it running (a terminal tab, tmux, or a launchd
 agent).
+
+Whistle is optional. Pass `--stt whistle` and it transcribes while you
+talk and pastes once at the end. That covers the headset button, and the
+handset on Codex, Hermes, and Grok.
+
+```sh
+python3 -m venv ~/.agent-phone/whistle-venv
+~/.agent-phone/whistle-venv/bin/pip install 'cactus-needle==3.1.0'
+DYLD_LIBRARY_PATH=/opt/homebrew/lib uv run python -m agent_phone.daemon -v --stt whistle
+```
+
+The daemon looks for `~/.agent-phone/whistle-venv/bin/python` unless you
+pass `--whistle-python`. If the worker fails, it falls back to whisper.cpp.
 
 ## 3. macOS permissions
 
@@ -59,8 +75,9 @@ enable its native dictation.
 
 Drop `~/.grok/hooks/agent-phone.json` (exact JSON in
 [grok-setup.md](grok-setup.md)) and set `[ui] voice_capture_mode = "hold"`
-in `~/.grok/config.toml`. The daemon holds Grok's `F8` push-to-talk;
-whisper is not used.
+in `~/.grok/config.toml`. By default the daemon holds Grok's `F8`
+push-to-talk and xAI does the transcription. `--stt whistle` skips F8
+and pastes a local transcript instead.
 
 ### Codex CLI
 
@@ -83,9 +100,13 @@ Open agent terminals, then from the phone:
    sweep them all into the Dock.
 2. Lamp blinks red: someone finished. Press `*` (or the terminal's number)
    to bring it up and read.
-3. Lift the receiver, speak, hang up. Claude Code and Grok Build terminals
-   stream through native dictation; Codex/Hermes terminals get a local
-   whisper transcript pasted in. Review it, press Redial (or Enter) to send.
+3. Dictate one of two ways. Lift the receiver, speak, hang up: that uses
+   the phone mic. Claude Code and default Grok Build terminals stream
+   through native dictation; Codex, Hermes, and Grok with `--stt whistle`
+   get a local transcript pasted in. Or press Headset to record the Mac's
+   current microphone, and press it again to paste. The phone lights that
+   button's lamp while the route is active. Review, then press Redial (or
+   Enter) to send.
 4. Hold interrupts a runaway agent; Delete clears a bad transcript.
 
 The full keypad reference is in the [README](../README.md#the-keypad).
@@ -98,9 +119,12 @@ The full keypad reference is in the [README](../README.md#the-keypad).
 - **Space characters typed into a terminal on receiver lift**: the daemon
   misidentified the harness — check `ps -t <tty>` shows the agent process,
   and the daemon log for `detected ...` lines.
-- **Dictation pastes nothing**: verify the whisper model path
-  (`~/.agent-phone/models/ggml-base.en.bin`) and that the phone is the
-  system default input.
+- **Dictation pastes nothing**: a handset recording needs the input named
+  Polycom CX300, not the system default. The headset button records the
+  current default input. The default engine is whisper.cpp
+  (`~/.agent-phone/models/ggml-base.en.bin`). `--stt whistle` uses
+  `~/.agent-phone/whistle-venv` and falls back to that model if the worker
+  fails.
 - **Hooks silent**: `curl http://127.0.0.1:8489/health` should return
   `{"ok": true}`; each harness has its own hook-listing command
   (`/hooks` in Claude Code or Grok Build, `hermes hooks doctor`).

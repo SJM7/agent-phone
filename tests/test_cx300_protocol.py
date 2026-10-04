@@ -114,6 +114,21 @@ def test_event_detector_button_edges():
     assert events == [("key", "*"), ("redial", None), ("offhook", None)]
 
 
+def test_event_detector_transducer_edges():
+    det = EventDetector()
+    # The route already showing at connect is not a press.
+    assert det.feed(parse_input_report(report(trans=0x60))) == []
+    assert det.feed(parse_input_report(report(trans=0x60))) == []
+    assert det.feed(parse_input_report(report(trans=0x00))) == [("transducer", None)]
+    assert det.feed(parse_input_report(report(trans=0x60))) == [("transducer", "headset")]
+    assert det.feed(parse_input_report(report(trans=0x40))) == [("transducer", "handset")]
+    # A headset press that also lifts the hook reports the route first.
+    det2 = EventDetector()
+    det2.feed(parse_input_report(report(trans=0x00)))
+    events = det2.feed(parse_input_report(report(trans=0x60, flags=0x01)))
+    assert events == [("transducer", "headset"), ("offhook", None)]
+
+
 def test_event_detector_instances_independent():
     a, b = EventDetector(), EventDetector()
     a.feed(parse_input_report(report(key=0x0C)))

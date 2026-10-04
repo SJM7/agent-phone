@@ -18,8 +18,9 @@ property) from a live CX300 in August 2026, then decoded item by item.
 - The keypad is a proper Telephony Key Pad array (usages Phone Key 0
   through Phone Key A, logical 1-13) packed in a nibble - which is why
   digit *d* maps to code *d*+1.
-- Output report **0x02** is an LED-page **Off-Hook** indicator we never
-  used (most plausibly the speakerphone button light).
+- Output report **0x02** is an LED-page **Off-Hook** indicator. On this
+  phone it lights the red message-waiting LED on the `1` key, not a
+  route-button lamp.
 - Output report **0x16** (status LED) has a second byte the community
   protocol never sends: four vendor flag bits (0xFF1A, 0xFF1B, 0xFF1F,
   0xFF20) and a *relative* 2-bit field (0xFF1C, logical -1..1).

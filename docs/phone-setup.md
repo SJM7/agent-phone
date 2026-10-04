@@ -73,7 +73,7 @@ seconds later.
 uv run python -m agent_phone.daemon --backend sip --stt-command 'whisper-cli -nt -f {wav}'
 ```
 
-Then wire up Claude Code hooks — see [claude-code-setup.md](claude-code-setup.md).
+Then wire up the harness you use — see [Getting started](getting-started.md#4-hook-up-your-agents).
 
 Quick LED test without the phone bound to anything: register the phone, then
 watch the log for `phone registered`; attention marks from a Claude Code Stop

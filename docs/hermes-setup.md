@@ -2,8 +2,10 @@
 
 [Hermes](https://hermes-agent.nousresearch.com) (Nous Research) works with
 Agent Phone like the other harnesses: bind with `#`, lamp blinks when a turn
-finishes, receiver dictates via local whisper (Hermes has no native TUI
-dictation, so it gets the same record-and-paste flow as Codex).
+finishes, and the receiver records and pastes (Hermes has no native TUI
+dictation, so it gets the same flow as Codex). `--stt whisper` (the
+default) runs whisper.cpp after hang-up. `--stt whistle` transcribes
+during the recording and pastes once.
 
 ## Hooks
 
@@ -41,6 +43,8 @@ doctor`.
 ## Dictation
 
 Same as [Codex](codex-setup.md): the daemon detects `hermes` on the
-terminal's tty, records the handset on receiver-lift, transcribes locally
-with whisper.cpp, and pastes the transcript for review. Enter (or the
-phone's Redial key) sends.
+terminal's tty, records the Polycom CX300 when you lift the handset, and
+pastes the transcript for review. `--stt whistle` uses the shared Whistle
+worker and falls back to whisper.cpp if that worker fails. The headset
+button records the Mac's current default input and pastes on the second
+press. Enter, or Redial, sends.

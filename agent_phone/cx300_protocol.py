@@ -67,6 +67,10 @@ class EventDetector:
         self._prev_key: Optional[str] = None
         self._prev_offhook: bool = False
         self._prev_buttons = {name: False for name in _BUTTON_FLAGS}
+        self._prev_transducer: Optional[str] = None
+        # The first report only establishes the route. A phone left on
+        # headset must not look like a fresh button press at connect.
+        self._seen_transducer = False
 
     def feed(self, state: InputState) -> List[Tuple[str, Optional[str]]]:
         events = []
@@ -76,6 +80,15 @@ class EventDetector:
         if current_key is not None:
             if current_key != prev_key:
                 events.append(("key", current_key))
+
+        if not self._seen_transducer:
+            self._seen_transducer = True
+            self._prev_transducer = state.transducer
+        elif state.transducer != self._prev_transducer:
+            # Before the hook edge, so a headset press that also goes
+            # off-hook is seen as a route change first.
+            events.append(("transducer", state.transducer))
+            self._prev_transducer = state.transducer
 
         for name in _BUTTON_FLAGS:
             pressed = getattr(state, name)

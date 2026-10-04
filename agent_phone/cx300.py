@@ -37,12 +37,15 @@ class Cx300Phone:
                  on_offhook: Callable[[], None],
                  on_onhook: Callable[[], None],
                  on_connect: Callable[[], None] | None = None,
-                 on_button: Callable[[str], None] | None = None) -> None:
+                 on_button: Callable[[str], None] | None = None,
+                 on_transducer: Callable[..., None] | None = None) -> None:
         self.on_key = on_key
         self.on_offhook = on_offhook
         self.on_onhook = on_onhook
         self.on_connect = on_connect
         self.on_button = on_button      # redial | hold | delete
+        # (name, initial). initial is the connect-time route, not a press.
+        self.on_transducer = on_transducer
         self._dev = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -186,6 +189,7 @@ class Cx300Phone:
     def _read_loop(self, dev) -> None:
         detector = EventDetector()
         last_keepalive = 0.0
+        opened = time.monotonic()
         while not self._stop.is_set():
             now = time.monotonic()
             self._blink_tick(now)
@@ -206,9 +210,26 @@ class Cx300Phone:
             state = parse_input_report(bytes(data))
             if state is None:
                 continue
-            for event, arg in detector.feed(state):
+            route = (state.offhook, state.transducer, state.mute_key,
+                     state.redial, state.hold, state.delete)
+            if route != getattr(self, "_last_route", None):
+                self._last_route = route
+                log.info("CX300 route offhook=%s transducer=%s mute=%s "
+                         "redial=%s hold=%s delete=%s", *route)
+            first_route = not detector._seen_transducer
+            events = detector.feed(state)
+            if first_route and self.on_transducer is not None:
+                # The phone sends no report until something changes. A route
+                # that shows up with the connect is state, not a press. A
+                # first report after that is the press itself.
+                initial = (time.monotonic() - opened) < 1.0
+                self._safely(self.on_transducer, state.transducer, initial)
+            for event, arg in events:
                 if event == "key" and arg is not None:
                     self._safely(self.on_key, arg)
+                elif event == "transducer":
+                    if self.on_transducer is not None:
+                        self._safely(self.on_transducer, arg, False)
                 elif event == "offhook":
                     self._safely(self.on_offhook)
                 elif event == "onhook":

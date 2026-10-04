@@ -12,6 +12,7 @@ Flow:
   *            focus the next window needing attention
   off-hook     record handset audio; on hang-up transcribe and paste into
                the frontmost terminal
+  headset      record the Mac's current microphone; press again to paste
 """
 from __future__ import annotations
 
@@ -49,6 +50,70 @@ def _usable_transcript(text: str) -> str:
     if cleaned.upper() in _BLANK_TRANSCRIPTS:
         return ""
     return cleaned
+
+
+def default_input_name() -> str:
+    """Name of the macOS default input, read without changing it.
+
+    ffmpeg's avfoundation demuxer selects that device by name (`:AirPods`).
+    The handset path keeps opening the Polycom by its own name.
+    """
+    import ctypes
+    from ctypes import c_uint32, c_void_p, byref
+
+    try:
+        coreaudio = ctypes.cdll.LoadLibrary(
+            "/System/Library/Frameworks/CoreAudio.framework/CoreAudio")
+        cf = ctypes.cdll.LoadLibrary(
+            "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+    except OSError:
+        return ""
+
+    class AudioObjectPropertyAddress(ctypes.Structure):
+        _fields_ = [("mSelector", c_uint32), ("mScope", c_uint32),
+                    ("mElement", c_uint32)]
+
+    def fourcc(text: str) -> int:
+        return int.from_bytes(text.encode("ascii"), "big")
+
+    coreaudio.AudioObjectGetPropertyData.argtypes = [
+        c_uint32, ctypes.POINTER(AudioObjectPropertyAddress), c_uint32,
+        c_void_p, ctypes.POINTER(c_uint32), c_void_p]
+    coreaudio.AudioObjectGetPropertyData.restype = c_uint32
+
+    address = AudioObjectPropertyAddress(fourcc("dIn "), fourcc("glob"), 0)
+    device = c_uint32()
+    size = c_uint32(ctypes.sizeof(device))
+    err = coreaudio.AudioObjectGetPropertyData(
+        1, byref(address), 0, None, byref(size), byref(device))
+    if err != 0 or device.value == 0:
+        return ""
+
+    address = AudioObjectPropertyAddress(fourcc("lnam"), fourcc("glob"), 0)
+    name_ref = c_void_p()
+    size = c_uint32(ctypes.sizeof(name_ref))
+    err = coreaudio.AudioObjectGetPropertyData(
+        device.value, byref(address), 0, None, byref(size), byref(name_ref))
+    if err != 0 or not name_ref.value:
+        return ""
+
+    class CFRange(ctypes.Structure):
+        _fields_ = [("loc", ctypes.c_long), ("length", ctypes.c_long)]
+
+    cf.CFStringGetLength.argtypes = [c_void_p]
+    cf.CFStringGetLength.restype = ctypes.c_long
+    cf.CFStringGetCharacters.argtypes = [
+        c_void_p, CFRange, ctypes.POINTER(ctypes.c_uint16)]
+    cf.CFRelease.argtypes = [c_void_p]
+    try:
+        count = cf.CFStringGetLength(name_ref)
+        if count <= 0:
+            return ""
+        buf = (ctypes.c_uint16 * count)()
+        cf.CFStringGetCharacters(name_ref, CFRange(0, count), buf)
+        return "".join(chr(c) for c in buf)
+    finally:
+        cf.CFRelease(name_ref)
 
 
 def _window_key(ref: macfocus.WindowRef) -> str:
@@ -104,6 +169,8 @@ class AgentPhoneDaemon:
         self._ptt_proc: subprocess.Popen | None = None
         self._ptt_held = False
         self._offhook_mode = voice_mode
+        self._capture_route: str | None = None   # handset | headset | headset-stopping
+        self._transducer: str | None = None
         self.loop: asyncio.AbstractEventLoop | None = None
         self.backend = None            # set by main()
 
@@ -284,7 +351,108 @@ class AgentPhoneDaemon:
                 return "claude"
         return self.voice_mode
 
+    def handle_transducer(self, name: str | None, initial: bool = False) -> None:
+        """Headset button: route byte 0x60. Press starts, press again stops.
+
+        The handset and speaker keep their own routes. A route that arrives
+        in the first second after connect is `initial`: it records where
+        the phone already sits and does not start a recording.
+        """
+        previous = self._transducer
+        self._transducer = name
+        if initial:
+            log.info("transducer baseline %s", name)
+            return
+        if name == previous:
+            return
+        log.info("transducer %s -> %s", previous, name)
+        if name == "headset":
+            self._start_headset_dictation()
+        elif previous == "headset":
+            self._stop_headset_dictation()
+
+    def _dictation_busy(self) -> bool:
+        if self._capture_route in ("handset", "headset", "headset-stopping"):
+            return True
+        if self._ptt_proc is not None or self._ptt_held:
+            return True
+        return bool(getattr(self.backend, "capturing", False))
+
+    def _start_headset_dictation(self) -> None:
+        """Record whatever macOS is using as the input right now."""
+        if self.voice_mode == "off":
+            log.info("headset ignored: voice is off")
+            return
+        if self._dictation_busy():
+            log.info("headset ignored: another dictation is active")
+            return
+        device = default_input_name()
+        if not device:
+            log.error("headset: no default input device")
+            self._refresh("no mic")
+            return
+        log.info("headset: recording %s", device)
+        self._capture_route = "headset"
+        self.backend.start_capture(device)
+        if not getattr(self.backend, "capturing", False):
+            self._capture_route = None
+            self._refresh("mic failed")
+            log.error("headset: capture did not start for %s", device)
+            return
+        self._refresh("listening")
+
+    def _stop_headset_dictation(self) -> None:
+        if self._capture_route != "headset":
+            return
+        self._capture_route = "headset-stopping"
+        self._refresh("transcribing")
+        log.info("headset: finishing")
+        if self.stt_engine == "whistle":
+            if self.loop is None:
+                self._finish_live(None, "headset")
+            else:
+                self.loop.run_in_executor(None, self._finish_live, None, "headset")
+            return
+        wav = self.backend.stop_capture()
+        if wav is None:
+            log.info("headset: no audio")
+            self._defer_headset_idle("no audio")
+            return
+        log.info("headset: %s", wav)
+        if self.loop is not None:
+            self.loop.run_in_executor(None, self._transcribe, wav)
+        # Idle is queued behind an on-hook event from the same report,
+        # so that hook does not also finish a handset recording.
+        self._defer_headset_idle("headset done")
+
+    def _defer_headset_idle(self, headline: str) -> None:
+        def idle() -> None:
+            self._capture_route = None
+            self._refresh(headline)
+        if self.loop is None:
+            idle()
+        else:
+            self.loop.call_soon(idle)
+
+    def _headset_capture_idle(self) -> None:
+        self._capture_route = None
+        self._refresh("headset done")
+
+    def _mark_handset_capture(self) -> None:
+        self._capture_route = "handset"
+        self.backend.start_capture()
+        if not getattr(self.backend, "capturing", False):
+            self._capture_route = None
+
     def handle_offhook(self) -> None:
+        if self._capture_route in ("headset", "headset-stopping"):
+            log.info("receiver up: headset dictation owns the recording")
+            return
+        # Headset selected, including a press that also reports off-hook.
+        # That recording uses the Mac's default input, not the CX300 mic.
+        if self._transducer == "headset":
+            self._start_headset_dictation()
+            return
         if self.whiteboard and self.voice_mode != "off":
             try:
                 self._whiteboard_session = self.whiteboard.begin(self._selected_target)
@@ -296,7 +464,7 @@ class AgentPhoneDaemon:
                 target = self._whiteboard_session["target"]
                 self._whiteboard_session["tty"] = macfocus.tty(target) if target else None
                 self._offhook_mode = "record"
-                self.backend.start_capture()
+                self._mark_handset_capture()
                 return
         self._offhook_mode = self._active_voice_mode()
         if self._offhook_mode in ("claude", "grok"):
@@ -304,9 +472,15 @@ class AgentPhoneDaemon:
             self._start_ptt_hold()
         elif self._offhook_mode == "record":
             log.info("receiver up: recording")
-            self.backend.start_capture()
+            self._mark_handset_capture()
 
     def handle_onhook(self) -> None:
+        if self._capture_route == "headset":
+            self._stop_headset_dictation()
+            return
+        if self._capture_route == "headset-stopping":
+            return
+        self._capture_route = None
         mode = getattr(self, "_offhook_mode", self.voice_mode)
         if mode in ("claude", "grok"):
             log.info("receiver down: releasing push-to-talk")
@@ -333,35 +507,43 @@ class AgentPhoneDaemon:
         else:
             self.loop.run_in_executor(None, self._transcribe, wav)
 
-    def _finish_live(self, session) -> None:
+    def _finish_live(self, session, source: str = "receiver") -> None:
         """Hangup: the worker already holds the committed words. Paste once."""
-        wav = self.backend.stop_capture()
-        text = getattr(self.backend, "live_transcript", None)
-        if hasattr(self.backend, "live_transcript"):
-            self.backend.live_transcript = None
-        if text:
-            text = _usable_transcript(text)
-        if text is None:
-            if wav is None:
-                if session:
-                    self.whiteboard.set_status(session, "failed", "No audio captured; marks remain in Sheets")
-                log.info("receiver down: no audio")
+        try:
+            wav = self.backend.stop_capture()
+            text = getattr(self.backend, "live_transcript", None)
+            if hasattr(self.backend, "live_transcript"):
+                self.backend.live_transcript = None
+            if text:
+                text = _usable_transcript(text)
+            if text is None:
+                if wav is None:
+                    if session:
+                        self.whiteboard.set_status(session, "failed", "No audio captured; marks remain in Sheets")
+                    log.info("%s down: no audio", source)
+                    return
+                log.info("whistle missed; falling back to file stt for %s", wav)
+                self._transcribe(wav, session)
                 return
-            log.info("whistle missed; falling back to file stt for %s", wav)
-            self._transcribe(wav, session)
-            return
-        if not text:
-            log.info("whistle heard no speech")
+            if not text:
+                log.info("whistle heard no speech")
+                if session:
+                    self.whiteboard.set_status(session, "failed", "Empty transcript; handoff saved, not pasted")
+                return
+            log.info("%s transcript (%d chars)",
+                     "headset" if source == "headset" else "whistle", len(text))
             if session:
-                self.whiteboard.set_status(session, "failed", "Empty transcript; handoff saved, not pasted")
-            return
-        log.info("whistle transcript (%d chars)", len(text))
-        if session:
-            prompt = self.whiteboard.bundle(session, text)
-            if prompt:
-                self._call_soon(self._deliver_whiteboard, prompt, session)
-            return
-        self._call_soon(self._deliver_transcript, text)
+                prompt = self.whiteboard.bundle(session, text)
+                if prompt:
+                    self._call_soon(self._deliver_whiteboard, prompt, session)
+                return
+            self._call_soon(self._deliver_transcript, text)
+        finally:
+            if source == "headset":
+                if self.loop is None:
+                    self._headset_capture_idle()
+                else:
+                    self._call_soon(self._headset_capture_idle)
 
     def _ptt_down_tell(self) -> str:
         return (f'tell application "System Events" to key down '
@@ -664,6 +846,10 @@ class UsbBackend:
         self._live: LiveCapture | None = None
         self.live_transcript: str | None = None
 
+    @property
+    def capturing(self) -> bool:
+        return self._ffmpeg is not None or self._live is not None
+
     async def start(self, daemon: AgentPhoneDaemon) -> None:
         from agent_phone.cx300 import Cx300Phone
         self.daemon = daemon
@@ -673,6 +859,8 @@ class UsbBackend:
             on_onhook=lambda: daemon._call_soon(daemon.handle_onhook),
             on_connect=lambda: daemon._call_soon(self._on_connect),
             on_button=lambda n: daemon._call_soon(daemon.handle_button, n),
+            on_transducer=lambda name, initial=False: daemon._call_soon(
+                daemon.handle_transducer, name, initial),
         )
         self.phone.start()
 
@@ -689,9 +877,12 @@ class UsbBackend:
     def show_dashboard(self, tl: str, bl: str, tr: str, br: str) -> None:
         self.phone.show_dashboard(tl, bl, tr, br)
 
-    def start_capture(self) -> None:
+    def start_capture(self, device: str | None = None) -> None:
         if self._ffmpeg is not None:
             return
+        # None keeps the handset on the Polycom. A name records that
+        # CoreAudio input instead (the headset button passes the default).
+        source = device or self.audio_device
         RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
         self._wav = RECORDINGS_DIR / f"utterance-{int(time.time())}.wav"
         self.live_transcript = None
@@ -701,11 +892,11 @@ class UsbBackend:
             # Raw samples on stdout so the worker can decode while the
             # receiver is still up. The WAV is written from those samples.
             cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error",
-                   "-f", "avfoundation", "-i", f":{self.audio_device}",
+                   "-f", "avfoundation", "-i", f":{source}",
                    "-ac", "1", "-ar", "16000", "-f", "s16le", "pipe:1"]
         else:
             cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error",
-                   "-f", "avfoundation", "-i", f":{self.audio_device}",
+                   "-f", "avfoundation", "-i", f":{source}",
                    "-ar", "16000", "-ac", "1", "-y", str(self._wav)]
         try:
             self._ffmpeg = subprocess.Popen(
@@ -826,7 +1017,7 @@ class SipBackend:
     def show_dashboard(self, tl: str, bl: str, tr: str, br: str) -> None:
         pass
 
-    def start_capture(self) -> None:
+    def start_capture(self, device: str | None = None) -> None:
         self._buffer = bytearray()
 
     def stop_capture(self) -> pathlib.Path | None:

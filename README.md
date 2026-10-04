@@ -19,6 +19,9 @@ desk phone's light blink.
   pressing to cycle. Digits `1`–`9` jump straight to a terminal.
 - **Pick up the receiver** — the handset mic becomes your prompt box.
   Talk, hang up, read the transcript, press Redial to send.
+- **Headset** — the other way to dictate. Press to record the Mac's
+  current microphone, press again to paste. The phone lights that
+  button's lamp while the route is active.
 
 No PBX, no cloud telephony, no browser extension. One daemon on your Mac
 and a $20-on-eBay desk phone.
@@ -43,8 +46,8 @@ is in [Getting started](docs/getting-started.md).
 |---|---|
 | [Getting started](docs/getting-started.md) | shipping box to dictation: prerequisites, daemon, macOS permissions, hooks, troubleshooting |
 | [Claude Code setup](docs/claude-code-setup.md) | hook configuration and native dictation |
-| [Grok Build setup](docs/grok-setup.md) | hook configuration and native F8 dictation |
-| [Codex setup](docs/codex-setup.md) | hook configuration and local whisper dictation |
+| [Grok Build setup](docs/grok-setup.md) | hook configuration, native F8, and local Whistle |
+| [Codex setup](docs/codex-setup.md) | hook configuration and local dictation |
 | [Hermes setup](docs/hermes-setup.md) | shell hooks and the turn-end debounce |
 | [VVX phone setup](docs/phone-setup.md) | the SIP backend for network phones |
 | [CX300 HID protocol](docs/cx300-hid-protocol.md) | the reverse-engineered protocol, with provenance and credits |
@@ -60,11 +63,13 @@ even a fresh terminal picks the right mode) and adapts:
 |---|---|---|---|---|
 | Lamp on turn finished | `Stop` hook | `Stop` hook (`end_turn` only) | `Stop` hook | `post_llm_call` + settle debounce |
 | Session linking | `UserPromptSubmit` hook | `UserPromptSubmit` hook | `UserPromptSubmit` hook | `pre_llm_call` / `pre_tool_call` |
-| Receiver dictation | native dictation (Space held for you) | native F8, or local Whistle paste with `--stt whistle` | local whisper.cpp, pasted for review | local whisper.cpp, pasted for review |
+| Receiver dictation | native dictation (Space held for you) | native F8, or local Whistle paste with `--stt whistle` | local paste (whisper.cpp, or Whistle with `--stt whistle`) | local paste (whisper.cpp, or Whistle with `--stt whistle`) |
 | Setup | [guide](docs/claude-code-setup.md) | [guide](docs/grok-setup.md) | [guide](docs/codex-setup.md) | [guide](docs/hermes-setup.md) |
 
 All four pass hook payloads as JSON on stdin with the same core fields, so
-one tiny hook script serves them all.
+one tiny hook script serves them all. The headset button is the same on
+every harness: it records the Mac's default input and pastes. It does not
+hold Space or F8.
 
 ## The keypad
 
@@ -80,12 +85,14 @@ to bind each terminal again.
 | Redial | press Enter in the focused terminal (send the dictated prompt) |
 | Hold | press Escape (interrupt a running agent) |
 | Delete | clear the input line (Ctrl+U) |
-| Receiver | dictate; hang up to finish |
+| Receiver | dictate into the phone mic; hang up to finish |
+| Headset | Mac's current microphone (AirPods when that is the default); press again to paste. The phone lights this button's lamp |
 | Mute | hardware-mutes the handset mic mid-dictation |
 | Lamp | blinking red: needs you; steady orange: agents working; green: all clear |
 
-The full loop never touches the keyboard: lamp blinks, `*`, read, lift,
-talk, hang up, Redial.
+The full loop never touches the keyboard: lamp blinks, `*`, read, dictate
+(lift and hang up, or press Headset twice), Redial. The phone stays
+silent — there is no ringtone.
 
 ## How it works
 
@@ -118,21 +125,23 @@ voicemail LED, host-controlled mic mute) verified on live hardware.
 
 ## Speech to text
 
-Dictation mode is chosen automatically per terminal; `--voice` sets the
-fallback for windows the daemon can't identify.
+Dictation on the receiver is chosen automatically per terminal; `--voice`
+sets the fallback for windows the daemon can't identify. The headset
+button is separate. It records the Mac's current default input and pastes
+one transcript on the second press, on every harness. The phone lights
+that button's own lamp while the route is active. The daemon does not
+drive the lamp, and it does not change which device macOS has selected.
 
-- **Claude Code terminals** use its built-in dictation: lifting the
-  receiver holds the push-to-talk key, hanging up releases it, and the
-  transcript appears in the prompt box for review.
-- **Grok Build terminals** do the same with Grok's native hold-to-talk
-  (`F8`): xAI speech-to-text, no local whisper. `--stt whistle` switches
-  Grok onto the local paste path instead: a warm Whistle process
-  transcribes while the receiver is up and the daemon pastes once on
-  hangup.
-- **Codex and Hermes terminals** get local transcription: the daemon
-  records the handset audio, runs whisper.cpp (`--stt-command`, with
-  `{wav}` replaced by the recording path), and pastes the transcript in.
-  Audio never leaves the machine.
+- **Claude Code, handset.** Lifting the receiver holds the push-to-talk
+  key, hanging up releases it, and the transcript appears in the prompt
+  for review. `--stt whistle` leaves this hold in place.
+- **Grok Build, handset.** The daemon holds F8 (xAI speech-to-text) unless
+  `--stt whistle`, which pastes a local transcript instead.
+- **Codex and Hermes, handset.** The daemon records the phone mic and
+  pastes. `--stt whisper` (the default) runs whisper.cpp after hang-up.
+  `--stt whistle` transcribes during the recording and pastes once, and
+  falls back to `--stt-command` if that worker fails. Audio stays on the
+  machine.
 
 ## Development
 
@@ -143,9 +152,10 @@ as an unpacked Chromium extension; the phone setup above is unchanged.
 
 The opt-in [recorded review workflow](browser-whiteboard/README.md#recorded-reviews)
 adds tab video, timestamped interactions, and bookmarked frames to handset
-handoffs. A keyboard shortcut can mark a moment now and later be assigned to a
-USB foot pedal. Recording is explicitly armed for one tab; it does not change
-your house styles or submit feedback automatically.
+handoffs. Mark a moment from the review bookmark control. That command has
+no default shortcut; assign one, or a USB foot pedal, at
+`chrome://extensions/shortcuts`. Recording is explicitly armed for one tab;
+it does not change your house styles or submit feedback automatically.
 
 ```sh
 uv run --group dev pytest
