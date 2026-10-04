@@ -1,7 +1,7 @@
 """Daemon logic tests with a stub backend and patched macfocus."""
 from agent_phone import daemon as daemon_mod
 from agent_phone import macfocus
-from agent_phone.daemon import AgentPhoneDaemon
+from agent_phone.daemon import AgentPhoneDaemon, grok_main_turn_ended, match_agent
 from agent_phone.macfocus import WindowRef
 
 
@@ -184,7 +184,9 @@ def _capture_osascript(monkeypatch):
     def fake_run(cmd, **kwargs):
         runs.append(cmd)
         class R:
+            returncode = 0
             stdout = ""
+            stderr = ""
         return R()
 
     def fake_popen(cmd, **kwargs):
@@ -471,6 +473,128 @@ def test_unbound_hermes_terminal_still_gets_record_mode(monkeypatch, tmp_path):
     daemon.handle_offhook()
     assert daemon.backend.capturing is True     # record mode, no space spam
     daemon.handle_onhook()
+
+
+def test_match_agent_grok_binary_not_config_path():
+    assert match_agent("/users/x/.grok/bin/grok --yolo") == "grok"
+    assert match_agent("grok") == "grok"
+    assert match_agent("grok-macos-aarch64") == "grok"
+    assert match_agent("grok --prompt fix codex hooks") == "grok"
+    assert match_agent("cat /users/x/.grok/config.toml") is None
+    assert match_agent("node /usr/local/bin/claude") == "claude"
+
+
+def test_grok_main_turn_ended_filters_observe_and_subagent():
+    assert grok_main_turn_ended({"reason": "end_turn"}) is True
+    assert grok_main_turn_ended({}) is True
+    assert grok_main_turn_ended({"reason": "other"}) is False
+    assert grok_main_turn_ended({"reason": "end_turn", "subagentType": "explore"}) is False
+
+
+def _ps_then_osascript(monkeypatch, stdout):
+    """Keep osascript capture, but answer `ps -t` with a harness process list."""
+    runs, procs = _capture_osascript(monkeypatch)
+    captured_run = daemon_mod.subprocess.run
+
+    def fake_run(cmd, **kwargs):
+        if cmd and cmd[0] == "ps":
+            class R:
+                pass
+            R.stdout = stdout
+            return R()
+        return captured_run(cmd, **kwargs)
+
+    monkeypatch.setattr(daemon_mod.subprocess, "run", fake_run)
+    return runs, procs
+
+
+def test_voice_grok_uses_local_capture_when_whistle_is_on(monkeypatch, tmp_path):
+    runs, procs = _ps_then_osascript(
+        monkeypatch, "S    -zsh\nS+   /Users/x/.grok/bin/grok\n")
+    daemon, refs, focused, bind, finish = make_daemon(monkeypatch, tmp_path,
+                                                      n_windows=1)
+    daemon.stt_engine = "whistle"
+
+    class _Loop:
+        def run_in_executor(self, _executor, fn, session):
+            fn(session)
+
+    daemon.loop = _Loop()
+    monkeypatch.setattr(macfocus, "tty", lambda ref: "/dev/ttys020")
+    bind(0)
+    daemon.handle_offhook()
+    assert daemon.backend.capturing is True
+    assert runs == [] and procs == []
+    daemon.handle_onhook()
+    assert daemon.backend.capturing is False
+
+
+def test_voice_grok_holds_f8(monkeypatch, tmp_path):
+    runs, procs = _ps_then_osascript(
+        monkeypatch, "S    -zsh\nS+   /Users/x/.grok/bin/grok\n")
+    daemon, refs, focused, bind, finish = make_daemon(monkeypatch, tmp_path,
+                                                      n_windows=1)
+    monkeypatch.setattr(macfocus, "tty", lambda ref: "/dev/ttys020")
+    bind(0)
+    assert daemon.window_agent["Terminal:100"] == "grok"
+    daemon.handle_offhook()
+    assert procs == []
+    down = " ".join(runs[0])
+    assert "key down 100" in down
+    assert "repeat" not in down
+    assert daemon.backend.capturing is False
+    daemon.handle_onhook()
+    released = " ".join(runs[-1])
+    assert "key up 100" in released
+
+
+def test_grok_tty_wins_over_claude_hook_tag(monkeypatch, tmp_path):
+    """Grok Build loads Claude-compat hooks, which tag ?agent=claude."""
+    runs, procs = _ps_then_osascript(
+        monkeypatch, "S+   /Users/x/.grok/bin/grok\n")
+    daemon, refs, focused, bind, finish = make_daemon(monkeypatch, tmp_path,
+                                                      n_windows=1)
+    bind(0)
+    daemon._turn_start({"session_id": "g1", "_agent": "claude"})
+    assert daemon.window_agent["Terminal:100"] == "claude"
+    monkeypatch.setattr(macfocus, "tty", lambda ref: "/dev/ttys021")
+    daemon.handle_offhook()
+    assert procs == []
+    assert "key down 100" in " ".join(runs[0])
+    assert daemon.backend.capturing is False
+    daemon.handle_onhook()
+
+
+def test_grok_stop_ignores_session_end_and_subagents(monkeypatch, tmp_path):
+    daemon, refs, focused, bind, finish = make_daemon(monkeypatch, tmp_path,
+                                                      n_windows=1)
+    bind(0)
+    daemon._turn_start({"session_id": "g1", "_agent": "grok"})
+    daemon._turn_done({"session_id": "g1", "_agent": "grok",
+                       "reason": "session_end"})
+    assert daemon.backend.led is False
+    daemon._turn_done({"session_id": "g1", "_agent": "grok",
+                       "reason": "end_turn", "subagentType": "explore"})
+    assert daemon.backend.led is False
+    daemon._turn_done({"session_id": "g1", "_agent": "grok",
+                       "reason": "end_turn"})
+    assert daemon.backend.led is True
+    assert daemon.router.needs_attention() == ["Terminal:100"]
+
+
+def test_grok_compatibility_stop_filters_non_main_turns(monkeypatch, tmp_path):
+    daemon, refs, focused, bind, finish = make_daemon(monkeypatch, tmp_path,
+                                                      n_windows=1)
+    bind(0)
+    payload = {"session_id": "g1", "sessionId": "g1", "_agent": "claude",
+               "hookEventName": "stop", "reason": "session_end"}
+    daemon._turn_start(payload)
+    daemon._turn_done(payload)
+    assert daemon.backend.led is False
+    daemon._turn_done(dict(payload, reason="end_turn", subagentType="explore"))
+    assert daemon.backend.led is False
+    daemon._turn_done(dict(payload, reason="end_turn"))
+    assert daemon.backend.led is True
 
 
 def test_voice_off_ignores_receiver(monkeypatch, tmp_path):

@@ -43,6 +43,7 @@ is in [Getting started](docs/getting-started.md).
 |---|---|
 | [Getting started](docs/getting-started.md) | shipping box to dictation: prerequisites, daemon, macOS permissions, hooks, troubleshooting |
 | [Claude Code setup](docs/claude-code-setup.md) | hook configuration and native dictation |
+| [Grok Build setup](docs/grok-setup.md) | hook configuration and native F8 dictation |
 | [Codex setup](docs/codex-setup.md) | hook configuration and local whisper dictation |
 | [Hermes setup](docs/hermes-setup.md) | shell hooks and the turn-end debounce |
 | [VVX phone setup](docs/phone-setup.md) | the SIP backend for network phones |
@@ -55,14 +56,14 @@ Agent Phone works with the major agent harnesses side by side — the daemon
 detects which one lives in each terminal (from its tty's process list, so
 even a fresh terminal picks the right mode) and adapts:
 
-| | [Claude Code](https://claude.com/claude-code) | [Codex CLI](https://developers.openai.com/codex) | [Hermes](https://hermes-agent.nousresearch.com) |
-|---|---|---|---|
-| Lamp on turn finished | `Stop` hook | `Stop` hook | `post_llm_call` + settle debounce |
-| Session linking | `UserPromptSubmit` hook | `UserPromptSubmit` hook | `pre_llm_call` / `pre_tool_call` |
-| Receiver dictation | native dictation (push-to-talk held for you) | local whisper.cpp, pasted for review | local whisper.cpp, pasted for review |
-| Setup | [guide](docs/claude-code-setup.md) | [guide](docs/codex-setup.md) | [guide](docs/hermes-setup.md) |
+| | [Claude Code](https://claude.com/claude-code) | [Grok Build](https://x.ai) | [Codex CLI](https://developers.openai.com/codex) | [Hermes](https://hermes-agent.nousresearch.com) |
+|---|---|---|---|---|
+| Lamp on turn finished | `Stop` hook | `Stop` hook (`end_turn` only) | `Stop` hook | `post_llm_call` + settle debounce |
+| Session linking | `UserPromptSubmit` hook | `UserPromptSubmit` hook | `UserPromptSubmit` hook | `pre_llm_call` / `pre_tool_call` |
+| Receiver dictation | native dictation (Space held for you) | native F8, or local Whistle paste with `--stt whistle` | local whisper.cpp, pasted for review | local whisper.cpp, pasted for review |
+| Setup | [guide](docs/claude-code-setup.md) | [guide](docs/grok-setup.md) | [guide](docs/codex-setup.md) | [guide](docs/hermes-setup.md) |
 
-All three pass hook payloads as JSON on stdin with the same core fields, so
+All four pass hook payloads as JSON on stdin with the same core fields, so
 one tiny hook script serves them all.
 
 ## The keypad
@@ -123,6 +124,11 @@ fallback for windows the daemon can't identify.
 - **Claude Code terminals** use its built-in dictation: lifting the
   receiver holds the push-to-talk key, hanging up releases it, and the
   transcript appears in the prompt box for review.
+- **Grok Build terminals** do the same with Grok's native hold-to-talk
+  (`F8`): xAI speech-to-text, no local whisper. `--stt whistle` switches
+  Grok onto the local paste path instead: a warm Whistle process
+  transcribes while the receiver is up and the daemon pastes once on
+  hangup.
 - **Codex and Hermes terminals** get local transcription: the daemon
   records the handset audio, runs whisper.cpp (`--stt-command`, with
   `{wav}` replaced by the recording path), and pastes the transcript in.

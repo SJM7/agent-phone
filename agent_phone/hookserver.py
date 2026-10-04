@@ -36,10 +36,16 @@ class HookCallbacks:
 
 
 def parse_hook_payload(body: bytes) -> dict:
-    """Parse the JSON Claude Code passes to hooks on stdin (forwarded verbatim)."""
+    """Parse hook JSON from stdin (Claude/Codex/Hermes snake_case, Grok camelCase)."""
     payload = json.loads(body.decode("utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"hook payload must be a JSON object, got {type(payload).__name__}")
+    for field in ("session_id", "sessionId"):
+        if payload.get(field) is not None and not isinstance(payload[field], str):
+            raise ValueError(f"{field} must be a string")
+    # Grok's envelope uses sessionId; the daemon keys on session_id.
+    if not payload.get("session_id") and payload.get("sessionId"):
+        payload["session_id"] = payload["sessionId"]
     return payload
 
 
@@ -72,7 +78,13 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _read_body(self) -> bytes:
         length = int(self.headers.get("Content-Length") or 0)
-        return self.rfile.read(length) if length > 0 else b""
+        if not 0 <= length <= 4 * 1024 * 1024:
+            raise ValueError("Invalid body size (maximum 4 MiB)")
+        self.connection.settimeout(5)
+        body = self.rfile.read(length) if length else b""
+        if len(body) != length:
+            raise ValueError("Incomplete request body")
+        return body
 
     def _respond(self, status: int, body: bytes = b"", content_type: str = "text/plain") -> None:
         self.send_response(status)
@@ -120,7 +132,12 @@ class _Handler(BaseHTTPRequestHandler):
                 self.close_connection = True
                 self._respond(400, json.dumps({"error": str(exc)}).encode(), "application/json")
             return
-        body = self._read_body()
+        try:
+            body = self._read_body()
+        except (ValueError, OSError):
+            self.close_connection = True
+            self._respond(400, b"bad request body\n")
+            return
         path, _, query = self.path.partition("?")
         if path == "/hook/stop":
             self._handle_hook(body, "on_turn_done", query)
@@ -139,7 +156,7 @@ class _Handler(BaseHTTPRequestHandler):
             log.warning("bad hook payload on %s: %s", self.path, exc)
             self._respond(400, b"bad hook payload\n")
             return
-        # ?agent=codex tags which harness sent the hook (default claude)
+        # ?agent=codex|hermes|grok tags which harness sent the hook (default claude)
         params = dict(urllib.parse.parse_qsl(query))
         session["_agent"] = params.get("agent", "claude")
         self._respond(204)

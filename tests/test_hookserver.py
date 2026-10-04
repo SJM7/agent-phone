@@ -1,3 +1,4 @@
+import http.client
 import json
 import threading
 import urllib.error
@@ -76,6 +77,22 @@ class TestParseHookPayload:
         body = json.dumps(STOP_HOOK_JSON).encode()
         assert parse_hook_payload(body) == STOP_HOOK_JSON
 
+    def test_grok_camelcase_session_id(self):
+        body = json.dumps({
+            "sessionId": "grok-sid",
+            "hookEventName": "stop",
+            "hook_event_name": "Stop",
+            "reason": "end_turn",
+        }).encode()
+        payload = parse_hook_payload(body)
+        assert payload["session_id"] == "grok-sid"
+        assert payload["sessionId"] == "grok-sid"
+        assert payload["reason"] == "end_turn"
+
+    def test_snake_case_session_id_wins(self):
+        body = json.dumps({"session_id": "keep", "sessionId": "ignore"}).encode()
+        assert parse_hook_payload(body)["session_id"] == "keep"
+
     def test_invalid_json(self):
         with pytest.raises(json.JSONDecodeError):
             parse_hook_payload(b"not json")
@@ -121,6 +138,30 @@ def server():
 
 
 class TestHookServerEndToEnd:
+    @pytest.mark.parametrize("field", ["session_id", "sessionId"])
+    @pytest.mark.parametrize("value", [[], {"bad": True}, 123])
+    def test_malformed_session_id_is_rejected(self, server, field, value):
+        srv, callbacks = server
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            post(f"http://127.0.0.1:{srv.port}/hook/stop",
+                 json.dumps({field: value}).encode(), "application/json")
+        assert exc.value.code == 400
+        assert not callbacks.turn_done.is_set()
+
+    @pytest.mark.parametrize("length", ["abc", "-1", str(4 * 1024 * 1024 + 1)])
+    def test_invalid_body_length_is_rejected(self, server, length):
+        srv, callbacks = server
+        connection = http.client.HTTPConnection("127.0.0.1", srv.port, timeout=5)
+        try:
+            connection.request("POST", "/hook/stop", body=b"",
+                               headers={"Content-Length": length})
+            response = connection.getresponse()
+            assert response.status == 400
+            response.read()
+            assert not callbacks.turn_done.is_set()
+        finally:
+            connection.close()
+
     def test_full_round_trip(self, server):
         srv, callbacks = server
         base = f"http://127.0.0.1:{srv.port}"
@@ -142,6 +183,23 @@ class TestHookServerEndToEnd:
         assert status == 204
         assert callbacks.turn_start.wait(5)
         assert callbacks.payloads["turn_start"]["prompt"] == "hi"
+
+        grok_stop = {
+            "sessionId": "g-1",
+            "hookEventName": "stop",
+            "hook_event_name": "Stop",
+            "reason": "end_turn",
+        }
+        callbacks.turn_done.clear()
+        status = post(
+            f"{base}/hook/stop?agent=grok",
+            json.dumps(grok_stop).encode(),
+            "application/json",
+        )
+        assert status == 204
+        assert callbacks.turn_done.wait(5)
+        assert callbacks.payloads["turn_done"]["session_id"] == "g-1"
+        assert callbacks.payloads["turn_done"]["_agent"] == "grok"
 
         status = post(f"{base}/phone/event", OFFHOOK_XML, "application/xml")
         assert status == 204

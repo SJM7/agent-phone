@@ -1,7 +1,7 @@
 #!/bin/sh
 # Agent hook: forward the hook JSON from stdin to the agent-phone daemon.
-# Usage: agent-phone-hook.sh (stop|user-prompt-submit) [claude|codex]
-# Works for both Claude Code and Codex hooks (both pass JSON on stdin).
+# Usage: agent-phone-hook.sh (stop|user-prompt-submit) [claude|codex|hermes|grok]
+# Works for Claude Code, Codex, Hermes, and Grok Build (JSON on stdin).
 # Exits 0 no matter what -- a dead daemon must never break the agent session.
 
 ENDPOINT="${1:-stop}"

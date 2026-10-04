@@ -1,6 +1,6 @@
 """The Agent Phone daemon: routes phone input to terminal attention.
 
-Phone-agnostic core (attention router, window focus, Claude Code hooks,
+Phone-agnostic core (attention router, window focus, agent hooks,
 speech-to-text) with two phone backends:
 
   usb  Polycom CX300: HID keys/hook/LED/LCD + CoreAudio capture via ffmpeg
@@ -29,16 +29,59 @@ import time
 from agent_phone import macfocus
 from agent_phone.attention import AttentionRouter
 from agent_phone.hookserver import HookCallbacks, HookServer
+from agent_phone.whistle_stream import LiveCapture, WhistleWorker
 
 log = logging.getLogger("agent_phone")
 
 RECORDINGS_DIR = pathlib.Path.home() / ".agent-phone" / "recordings"
 BINDINGS_PATH = pathlib.Path.home() / ".agent-phone" / "bindings.json"
 HERMES_TURN_SETTLE = 4.0    # quiet seconds after a Hermes LLM call = turn done
+# Grok binds Ctrl+Space and F8. AppleScript cannot `key down` a Control+Space
+# chord (syntax error -2740). F8 is key code 100 and CAN be held.
+GROK_PTT_DOWN = 'tell application "System Events" to key down 100'
+GROK_PTT_UP = 'tell application "System Events" to key up 100'
+# Whisper emits this on silence. It is not something the user said.
+_BLANK_TRANSCRIPTS = {"[BLANK_AUDIO]", "[SILENCE]", "[INAUDIBLE]"}
+
+
+def _usable_transcript(text: str) -> str:
+    cleaned = text.strip()
+    if cleaned.upper() in _BLANK_TRANSCRIPTS:
+        return ""
+    return cleaned
 
 
 def _window_key(ref: macfocus.WindowRef) -> str:
     return f"{ref.app}:{ref.window_id}"
+
+
+def match_agent(command: str) -> str | None:
+    """Identify a harness from one `ps` command= line (already lowercased)."""
+    # Basename of the executable only — a path like ~/.grok/config.toml
+    # must not look like the Grok Build TUI.
+    first = command.split(None, 1)[0] if command.strip() else ""
+    base = first.rsplit("/", 1)[-1]
+    if base == "grok" or base.startswith("grok-"):
+        return "grok"
+    if "hermes" in command:
+        return "hermes"
+    if "codex" in command:
+        return "codex"
+    if "claude" in command:
+        return "claude"
+    return None
+
+
+def grok_main_turn_ended(payload: dict) -> bool:
+    """True when a Grok Stop hook is a real main-agent turn completion.
+
+    Grok also fires observe-only Stop at session end, and the same hook
+    file can run inside a subagent. Neither should blink the lamp.
+    """
+    if payload.get("subagentType") or payload.get("subagent_type"):
+        return False
+    reason = payload.get("reason")
+    return reason is None or reason == "end_turn"
 
 
 class AgentPhoneDaemon:
@@ -49,11 +92,17 @@ class AgentPhoneDaemon:
                  voice_mode: str = "claude",
                  dictation_key: str = " ",
                  bindings_path: pathlib.Path = BINDINGS_PATH,
-                 whiteboard_dir: pathlib.Path | None = None) -> None:
+                 whiteboard_dir: pathlib.Path | None = None,
+                 stt_engine: str = "whisper",
+                 whistle_python: str | None = None) -> None:
         self.stt_command = stt_command
+        self.stt_engine = stt_engine          # whisper | whistle
+        self.whistle_python = whistle_python
+        self.whistle_worker: WhistleWorker | None = None
         self.voice_mode = voice_mode          # claude | record | off
         self.dictation_key = dictation_key
         self._ptt_proc: subprocess.Popen | None = None
+        self._ptt_held = False
         self._offhook_mode = voice_mode
         self.loop: asyncio.AbstractEventLoop | None = None
         self.backend = None            # set by main()
@@ -61,7 +110,7 @@ class AgentPhoneDaemon:
         self.router = AttentionRouter()
         self.windows: dict[str, macfocus.WindowRef] = {}
         self.sessions: dict[str, str] = {}      # agent session_id -> window key
-        self.window_agent: dict[str, str] = {}  # window key -> claude|codex|hermes
+        self.window_agent: dict[str, str] = {}  # window key -> claude|codex|hermes|grok
         self._pending_done: dict[str, asyncio.TimerHandle] = {}
         self.busy: set[str] = set()             # window keys with a turn running
         self._led_state: str | None = None
@@ -80,11 +129,25 @@ class AgentPhoneDaemon:
 
     async def run(self) -> None:
         self.loop = asyncio.get_running_loop()
+        if self.stt_engine == "whistle":
+            self._start_whistle()
         await self.backend.start(self)
         self.hooks.start()
-        log.info("agent-phone up (%s backend), hooks on http://127.0.0.1:%d",
-                 self.backend.name, self.hooks.port)
+        log.info("agent-phone up (%s backend, %s stt), hooks on http://127.0.0.1:%d",
+                 self.backend.name, self.stt_engine, self.hooks.port)
         await asyncio.Event().wait()
+
+    def _start_whistle(self) -> None:
+        python = self.whistle_python
+        if not python or not pathlib.Path(python).exists():
+            raise SystemExit(f"whistle python not found: {python}")
+        self.whistle_worker = WhistleWorker(python, pathlib.Path(__file__).resolve().parent.parent)
+        self.whistle_worker.start()
+
+    def close(self) -> None:
+        if self.whistle_worker is not None:
+            self.whistle_worker.close()
+            self.whistle_worker = None
 
     def _call_soon(self, fn, *args) -> None:
         if self.loop is not None:
@@ -166,15 +229,6 @@ class AgentPhoneDaemon:
         except (subprocess.SubprocessError, OSError):
             return None
 
-        def match(line: str) -> str | None:
-            if "hermes" in line:
-                return "hermes"
-            if "codex" in line:
-                return "codex"
-            if "claude" in line:
-                return "claude"
-            return None
-
         # Prefer the FOREGROUND process (stat contains '+') — that is the TUI
         # the user is actually looking at. Background stragglers on the same
         # tty (a stray `codex exec`, a helper) must not win over it.
@@ -184,7 +238,7 @@ class AgentPhoneDaemon:
             if len(parts) != 2:
                 continue
             stat, command = parts
-            found = match(command)
+            found = match_agent(command)
             if found:
                 agent_any = found
                 if "+" in stat:
@@ -204,9 +258,11 @@ class AgentPhoneDaemon:
     def _active_voice_mode(self) -> str:
         """Voice mode for the terminal the user is dictating into.
 
-        Claude Code has native push-to-talk we can hold; Codex (and anything
-        else) gets local record+transcribe+paste. The frontmost bound
-        window's agent decides; --voice is the default/override.
+        Claude Code has native push-to-talk we can hold. Codex and Hermes
+        record locally and paste. Grok does too when --stt whistle is on;
+        otherwise Grok's own F8 hold is used. Live tty detection wins over
+        a stale hook tag (Grok may also load Claude's hooks). --voice is
+        the default when the frontmost window is unidentified.
         """
         if self.voice_mode == "off":
             return "off"
@@ -214,9 +270,16 @@ class AgentPhoneDaemon:
         # for the lamp and cycling, never a prerequisite for dictating.
         ref = macfocus.frontmost_window()
         if ref is not None:
-            agent = self._agent_for(ref)
+            live = self._detect_agent(ref)
+            if live:
+                self.window_agent[_window_key(ref)] = live
+            agent = live or self.window_agent.get(_window_key(ref))
             if agent in ("codex", "hermes"):
                 return "record"       # no native dictation in these TUIs
+            if agent == "grok":
+                # Whistle replaces the cloud engine: same record-and-paste
+                # path Codex already uses, with the warm worker underneath.
+                return "record" if self.stt_engine == "whistle" else "grok"
             if agent == "claude":
                 return "claude"
         return self.voice_mode
@@ -236,12 +299,8 @@ class AgentPhoneDaemon:
                 self.backend.start_capture()
                 return
         self._offhook_mode = self._active_voice_mode()
-        if self._offhook_mode == "claude":
-            # Hold Claude Code's push-to-talk key for as long as the receiver
-            # is up. Terminals detect a held key by its repeat stream, and
-            # synthetic key events don't auto-repeat, so post key-downs on a
-            # repeat-like cadence until hang-up.
-            log.info("receiver up: holding push-to-talk")
+        if self._offhook_mode in ("claude", "grok"):
+            log.info("receiver up: holding %s push-to-talk", self._offhook_mode)
             self._start_ptt_hold()
         elif self._offhook_mode == "record":
             log.info("receiver up: recording")
@@ -249,16 +308,20 @@ class AgentPhoneDaemon:
 
     def handle_onhook(self) -> None:
         mode = getattr(self, "_offhook_mode", self.voice_mode)
-        if mode == "claude":
+        if mode in ("claude", "grok"):
             log.info("receiver down: releasing push-to-talk")
             self._stop_ptt_hold()
             return
         if mode != "record":
             return
-        wav = self.backend.stop_capture()
         session, self._whiteboard_session = self._whiteboard_session, None
         if session:
             self.whiteboard.finish(session)
+        if self.stt_engine == "whistle":
+            assert self.loop is not None
+            self.loop.run_in_executor(None, self._finish_live, session)
+            return
+        wav = self.backend.stop_capture()
         if wav is None:
             if session:
                 self.whiteboard.set_status(session, "failed", "No audio captured; marks remain in Sheets")
@@ -270,13 +333,67 @@ class AgentPhoneDaemon:
         else:
             self.loop.run_in_executor(None, self._transcribe, wav)
 
+    def _finish_live(self, session) -> None:
+        """Hangup: the worker already holds the committed words. Paste once."""
+        wav = self.backend.stop_capture()
+        text = getattr(self.backend, "live_transcript", None)
+        if hasattr(self.backend, "live_transcript"):
+            self.backend.live_transcript = None
+        if text:
+            text = _usable_transcript(text)
+        if text is None:
+            if wav is None:
+                if session:
+                    self.whiteboard.set_status(session, "failed", "No audio captured; marks remain in Sheets")
+                log.info("receiver down: no audio")
+                return
+            log.info("whistle missed; falling back to file stt for %s", wav)
+            self._transcribe(wav, session)
+            return
+        if not text:
+            log.info("whistle heard no speech")
+            if session:
+                self.whiteboard.set_status(session, "failed", "Empty transcript; handoff saved, not pasted")
+            return
+        log.info("whistle transcript (%d chars)", len(text))
+        if session:
+            prompt = self.whiteboard.bundle(session, text)
+            if prompt:
+                self._call_soon(self._deliver_whiteboard, prompt, session)
+            return
+        self._call_soon(self._deliver_transcript, text)
+
+    def _ptt_down_tell(self) -> str:
+        return (f'tell application "System Events" to key down '
+                f'"{self.dictation_key}"')
+
+    def _ptt_up_tells(self) -> list[str]:
+        return [f'tell application "System Events" to key up '
+                f'"{self.dictation_key}"']
+
+    def _osascript(self, tells: list[str]) -> None:
+        args = ["osascript"]
+        for tell in tells:
+            args.extend(["-e", tell])
+        result = subprocess.run(args, capture_output=True, timeout=5, text=True)
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "").strip() or (
+                f"exit {result.returncode}")
+            raise RuntimeError(err)
+
     def _start_ptt_hold(self) -> None:
-        if self._ptt_proc is not None:
+        if self._ptt_proc is not None or self._ptt_held:
+            return
+        if self._offhook_mode == "grok":
+            try:
+                self._osascript([GROK_PTT_DOWN])
+                self._ptt_held = True
+            except (RuntimeError, OSError, subprocess.TimeoutExpired) as exc:
+                log.error("could not start grok voice: %s", exc)
             return
         cmd = ["osascript",
                "-e", "repeat 7500 times",   # ~5 min safety cap
-               "-e", f'tell application "System Events" to key down '
-                     f'"{self.dictation_key}"',
+               "-e", self._ptt_down_tell(),
                "-e", "delay 0.04",
                "-e", "end repeat"]
         try:
@@ -287,6 +404,7 @@ class AgentPhoneDaemon:
 
     def _stop_ptt_hold(self) -> None:
         proc, self._ptt_proc = self._ptt_proc, None
+        held, self._ptt_held = self._ptt_held, False
 
         def release() -> None:
             # The repeat loop must be FULLY dead before the key-up goes out,
@@ -299,12 +417,11 @@ class AgentPhoneDaemon:
                 except subprocess.TimeoutExpired:
                     proc.kill()
             try:
-                subprocess.run(
-                    ["osascript", "-e",
-                     f'tell application "System Events" to key up '
-                     f'"{self.dictation_key}"'],
-                    capture_output=True, timeout=5, check=True)
-            except (subprocess.SubprocessError, OSError) as exc:
+                if held:
+                    self._osascript([GROK_PTT_UP])
+                else:
+                    self._osascript(self._ptt_up_tells())
+            except (RuntimeError, OSError, subprocess.TimeoutExpired) as exc:
                 log.error("push-to-talk key up failed: %s", exc)
         if self.loop is not None:
             self.loop.run_in_executor(None, release)
@@ -418,6 +535,12 @@ class AgentPhoneDaemon:
 
     def _turn_done(self, payload: dict) -> None:
         sid = payload.get("session_id")
+        # Grok also invokes Claude-compatible hooks, retaining its camelCase
+        # envelope even when the forwarding script tags the event as Claude.
+        grok_hook = (payload.get("_agent") == "grok" or
+                     ("sessionId" in payload and "hookEventName" in payload))
+        if grok_hook and not grok_main_turn_ended(payload):
+            return
         if sid and payload.get("_agent") == "hermes":
             # Hermes has no turn-end event; a post_llm_call with nothing
             # following it IS the end of the turn. Debounce: fire only if
@@ -471,7 +594,9 @@ class AgentPhoneDaemon:
                 self.whiteboard.set_status(session, "failed", "Transcription failed; audio and saved marks retained")
             log.error("stt command failed: %s", exc)
             return
-        text = out.stdout.strip()
+        text = _usable_transcript(out.stdout)
+        if not text:
+            log.info("file stt heard no speech in %s", wav_path)
         if session:
             prompt = self.whiteboard.bundle(session, text)
             if prompt and text:
@@ -536,6 +661,8 @@ class UsbBackend:
         self.daemon: AgentPhoneDaemon | None = None
         self._ffmpeg: subprocess.Popen | None = None
         self._wav: pathlib.Path | None = None
+        self._live: LiveCapture | None = None
+        self.live_transcript: str | None = None
 
     async def start(self, daemon: AgentPhoneDaemon) -> None:
         from agent_phone.cx300 import Cx300Phone
@@ -567,18 +694,45 @@ class UsbBackend:
             return
         RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
         self._wav = RECORDINGS_DIR / f"utterance-{int(time.time())}.wav"
-        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error",
-               "-f", "avfoundation", "-i", f":{self.audio_device}",
-               "-ar", "16000", "-ac", "1", "-y", str(self._wav)]
+        self.live_transcript = None
+        worker = self.daemon.whistle_worker if self.daemon else None
+        live = worker is not None and self.daemon is not None and self.daemon.stt_engine == "whistle"
+        if live:
+            # Raw samples on stdout so the worker can decode while the
+            # receiver is still up. The WAV is written from those samples.
+            cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error",
+                   "-f", "avfoundation", "-i", f":{self.audio_device}",
+                   "-ac", "1", "-ar", "16000", "-f", "s16le", "pipe:1"]
+        else:
+            cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error",
+                   "-f", "avfoundation", "-i", f":{self.audio_device}",
+                   "-ar", "16000", "-ac", "1", "-y", str(self._wav)]
         try:
-            self._ffmpeg = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
-                                            stderr=subprocess.PIPE)
+            self._ffmpeg = subprocess.Popen(
+                cmd, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE if live else subprocess.DEVNULL,
+                stderr=subprocess.PIPE)
         except OSError as exc:
             log.error("could not start ffmpeg capture: %s", exc)
             self._ffmpeg = None
             self._wav = None
+            return
+        if live:
+            assert self._wav is not None and worker is not None
+            self._live = LiveCapture(self._ffmpeg, self._wav, worker)
+            self._live.start()
 
     def stop_capture(self) -> pathlib.Path | None:
+        live, self._live = self._live, None
+        if live is not None:
+            self.live_transcript = live.finish()
+            self._ffmpeg = None
+            wav = self._wav
+            self._wav = None
+            if wav is not None and wav.exists() and wav.stat().st_size > 44:
+                return wav
+            log.warning("capture produced no audio")
+            return None
         proc, wav = self._ffmpeg, self._wav
         self._ffmpeg = None
         self._wav = None
@@ -709,10 +863,13 @@ def main() -> None:
                         help="Enable authenticated local whiteboard handoffs in this directory")
     parser.add_argument("--voice", choices=("claude", "record", "off"),
                         default="claude",
-                        help="claude: hold Claude Code's push-to-talk key "
-                             "while the receiver is up (its dictation types "
-                             "into the prompt box); record: capture audio and "
-                             "run --stt-command; off: ignore the receiver")
+                        help="fallback when the frontmost terminal's harness "
+                             "is unknown. claude: hold Claude Code's "
+                             "push-to-talk key; record: capture audio and "
+                             "run --stt-command; off: ignore the receiver. "
+                             "Grok Build uses native F8 hold unless "
+                             "--stt whistle, which pastes locally. "
+                             "Codex/Hermes always record")
     parser.add_argument("--dictation-key", default=" ",
                         help="key held for Claude Code push-to-talk "
                              "(default: space)")
@@ -724,16 +881,31 @@ def main() -> None:
                              "{wav} is replaced with the recording path; "
                              "stdout is the transcript "
                              "(default: whisper-cli with the model in "
-                             "~/.agent-phone/models, if present)")
+                             "~/.agent-phone/models, if present). "
+                             "Used as the fallback when --stt whistle fails")
+    parser.add_argument("--stt", choices=("whisper", "whistle"), default="whisper",
+                        help="whisper runs --stt-command after hangup. "
+                             "whistle keeps a warm local model, transcribes "
+                             "while the receiver is up, and pastes once on "
+                             "hangup. Grok terminals use this paste path "
+                             "instead of F8")
+    parser.add_argument("--whistle-python", default=None,
+                        help="python with cactus-needle installed "
+                             "(default: ~/.agent-phone/whistle-venv/bin/python)")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
+    whistle_python = args.whistle_python
+    if args.stt == "whistle" and not whistle_python:
+        whistle_python = str(pathlib.Path.home() / ".agent-phone" / "whistle-venv" / "bin" / "python")
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     daemon = AgentPhoneDaemon(args.http_port, args.stt_command,
                               voice_mode=args.voice,
                               dictation_key=args.dictation_key,
-                              whiteboard_dir=args.whiteboard_dir)
+                              whiteboard_dir=args.whiteboard_dir,
+                              stt_engine=args.stt,
+                              whistle_python=whistle_python)
     if args.backend == "usb":
         daemon.backend = UsbBackend(args.audio_device)
     else:
@@ -743,6 +915,8 @@ def main() -> None:
         asyncio.run(daemon.run())
     except KeyboardInterrupt:
         pass
+    finally:
+        daemon.close()
 
 
 if __name__ == "__main__":

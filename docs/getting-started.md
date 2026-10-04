@@ -55,6 +55,13 @@ entries running `agent-phone-hook.sh stop` / `agent-phone-hook.sh
 user-prompt-submit`. Then run `/voice hold` once inside Claude Code to
 enable its native dictation.
 
+### Grok Build
+
+Drop `~/.grok/hooks/agent-phone.json` (exact JSON in
+[grok-setup.md](grok-setup.md)) and set `[ui] voice_capture_mode = "hold"`
+in `~/.grok/config.toml`. The daemon holds Grok's `F8` push-to-talk;
+whisper is not used.
+
 ### Codex CLI
 
 Append the `[[hooks.Stop]]` / `[[hooks.UserPromptSubmit]]` tables to
@@ -76,9 +83,9 @@ Open agent terminals, then from the phone:
    sweep them all into the Dock.
 2. Lamp blinks red: someone finished. Press `*` (or the terminal's number)
    to bring it up and read.
-3. Lift the receiver, speak, hang up. Claude Code terminals stream through
-   native dictation; Codex/Hermes terminals get a local whisper transcript
-   pasted in. Review it, press Redial (or Enter) to send.
+3. Lift the receiver, speak, hang up. Claude Code and Grok Build terminals
+   stream through native dictation; Codex/Hermes terminals get a local
+   whisper transcript pasted in. Review it, press Redial (or Enter) to send.
 4. Hold interrupts a runaway agent; Delete clears a bad transcript.
 
 The full keypad reference is in the [README](../README.md#the-keypad).
@@ -96,4 +103,4 @@ The full keypad reference is in the [README](../README.md#the-keypad).
   system default input.
 - **Hooks silent**: `curl http://127.0.0.1:8489/health` should return
   `{"ok": true}`; each harness has its own hook-listing command
-  (`/hooks` in Claude Code, `hermes hooks doctor`).
+  (`/hooks` in Claude Code or Grok Build, `hermes hooks doctor`).
